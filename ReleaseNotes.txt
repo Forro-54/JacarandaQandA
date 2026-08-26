@@ -1,0 +1,23 @@
+Jacaranda Q&A 01.00.00
+
+Initial independent development release.
+
+- New DNN 10 WebForms module; does not modify or depend on Jacaranda Comments at runtime.
+- Installs to DesktopModules/JacarandaQandA.
+- Separate JacarandaQAQuestions, JacarandaQAResponses and JacarandaQAPortalSettings tables.
+- Supports registered-user questions and optional guest questions.
+- Supports portal-wide moderation of new questions and questioner follow-ups.
+- Supports ministry answers by DNN Superusers and the portal Administrators role.
+- Supports follow-up responses only from the original questioner.
+- Secure long-lived guest conversation ownership uses a random browser credential whose hash alone is stored in the database.
+- Approved follow-ups return a conversation to Awaiting Answer; ministry answers mark it Answered; administrators can Close or reopen questions.
+- Central Q&A Administration includes Pending Moderation, Awaiting Answer, Answered and Closed views.
+- Guest posting is disabled by default; guest submissions are always moderated.
+- Registered-question moderation is enabled by default.
+- Includes parameterised SQL, server-side portal/page/module scoping, output encoding, anti-CSRF tokens, honeypot protection, rate limiting, private language filtering, optional arithmetic CAPTCHA and optional moderator email notifications.
+- Uses Post/Redirect/Get after successful public submissions to avoid accidental duplicate resubmission on refresh.
+
+Planned for a later development build after the 01.00.00 baseline has been runtime-tested:
+- five-minute guest text correction using GuestEditTokenHash;
+- registered-questioner 15-minute text editing;
+- additional notification refinements, including possible questioner notification when an answer is posted.

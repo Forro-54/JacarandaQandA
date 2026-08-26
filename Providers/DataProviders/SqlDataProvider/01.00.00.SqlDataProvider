@@ -1,0 +1,124 @@
+-- Jacaranda Q&A 01.00.00
+-- Initial independent schema. No Jacaranda Comments tables are used or modified.
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.objects
+    WHERE object_id = OBJECT_ID(N'{databaseOwner}[{objectQualifier}JacarandaQAQuestions]')
+      AND type = N'U'
+)
+BEGIN
+    CREATE TABLE {databaseOwner}[{objectQualifier}JacarandaQAQuestions] (
+        [QuestionId] INT IDENTITY(1,1) NOT NULL,
+        [PortalId] INT NOT NULL,
+        [TabId] INT NOT NULL,
+        [ModuleId] INT NOT NULL,
+        [UserId] INT NULL,
+        [DisplayName] NVARCHAR(100) NOT NULL,
+        [GuestEmailEncrypted] NVARCHAR(2048) NULL,
+        [GuestRateLimitKey] NVARCHAR(64) NULL,
+        [GuestEditTokenHash] NVARCHAR(64) NULL,
+        [GuestConversationTokenHash] NVARCHAR(64) NULL,
+        [QuestionTitle] NVARCHAR(250) NOT NULL,
+        [QuestionText] NVARCHAR(MAX) NOT NULL,
+        [QuestionStatus] TINYINT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAQ_Status] DEFAULT ((0)),
+        [IsApproved] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAQ_Approved] DEFAULT ((0)),
+        [IsDeleted] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAQ_Deleted] DEFAULT ((0)),
+        [IsLanguageFlagged] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAQ_Language] DEFAULT ((0)),
+        [CreatedOnDate] DATETIME NOT NULL CONSTRAINT [DF_{objectQualifier}JQAQ_Created] DEFAULT (GETUTCDATE()),
+        [CreatedByUserId] INT NULL,
+        [EditedOnDate] DATETIME NULL,
+        [EditedByUserId] INT NULL,
+        [LastModifiedOnDate] DATETIME NULL,
+        [LastModifiedByUserId] INT NULL,
+        CONSTRAINT [PK_{objectQualifier}JacarandaQAQuestions] PRIMARY KEY CLUSTERED ([QuestionId] ASC),
+        CONSTRAINT [CK_{objectQualifier}JQAQ_Status] CHECK ([QuestionStatus] IN (0,1,2))
+    );
+
+    CREATE NONCLUSTERED INDEX [IX_{objectQualifier}JQAQ_Page]
+    ON {databaseOwner}[{objectQualifier}JacarandaQAQuestions]
+       ([PortalId], [TabId], [ModuleId], [IsDeleted], [IsApproved], [CreatedOnDate] DESC);
+
+    CREATE NONCLUSTERED INDEX [IX_{objectQualifier}JQAQ_Awaiting]
+    ON {databaseOwner}[{objectQualifier}JacarandaQAQuestions]
+       ([PortalId], [IsDeleted], [IsApproved], [QuestionStatus], [CreatedOnDate] ASC)
+    INCLUDE ([TabId], [ModuleId], [UserId], [DisplayName], [QuestionTitle]);
+
+    CREATE NONCLUSTERED INDEX [IX_{objectQualifier}JQAQ_GuestRate]
+    ON {databaseOwner}[{objectQualifier}JacarandaQAQuestions]
+       ([PortalId], [GuestRateLimitKey], [CreatedOnDate] DESC)
+    INCLUDE ([IsDeleted]);
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.objects
+    WHERE object_id = OBJECT_ID(N'{databaseOwner}[{objectQualifier}JacarandaQAResponses]')
+      AND type = N'U'
+)
+BEGIN
+    CREATE TABLE {databaseOwner}[{objectQualifier}JacarandaQAResponses] (
+        [ResponseId] INT IDENTITY(1,1) NOT NULL,
+        [QuestionId] INT NOT NULL,
+        [PortalId] INT NOT NULL,
+        [TabId] INT NOT NULL,
+        [ModuleId] INT NOT NULL,
+        [ResponseType] TINYINT NOT NULL,
+        [UserId] INT NULL,
+        [DisplayName] NVARCHAR(100) NOT NULL,
+        [ResponseText] NVARCHAR(MAX) NOT NULL,
+        [GuestRateLimitKey] NVARCHAR(64) NULL,
+        [GuestEditTokenHash] NVARCHAR(64) NULL,
+        [IsApproved] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAR_Approved] DEFAULT ((0)),
+        [IsDeleted] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAR_Deleted] DEFAULT ((0)),
+        [IsLanguageFlagged] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAR_Language] DEFAULT ((0)),
+        [CreatedOnDate] DATETIME NOT NULL CONSTRAINT [DF_{objectQualifier}JQAR_Created] DEFAULT (GETUTCDATE()),
+        [CreatedByUserId] INT NULL,
+        [EditedOnDate] DATETIME NULL,
+        [EditedByUserId] INT NULL,
+        [LastModifiedOnDate] DATETIME NULL,
+        [LastModifiedByUserId] INT NULL,
+        CONSTRAINT [PK_{objectQualifier}JacarandaQAResponses] PRIMARY KEY CLUSTERED ([ResponseId] ASC),
+        CONSTRAINT [CK_{objectQualifier}JQAR_Type] CHECK ([ResponseType] IN (1,2))
+    );
+
+    CREATE NONCLUSTERED INDEX [IX_{objectQualifier}JQAR_Question]
+    ON {databaseOwner}[{objectQualifier}JacarandaQAResponses]
+       ([QuestionId], [IsDeleted], [IsApproved], [CreatedOnDate] ASC, [ResponseId] ASC)
+    INCLUDE ([ResponseType], [UserId], [DisplayName]);
+
+    CREATE NONCLUSTERED INDEX [IX_{objectQualifier}JQAR_Moderation]
+    ON {databaseOwner}[{objectQualifier}JacarandaQAResponses]
+       ([PortalId], [IsDeleted], [IsApproved], [CreatedOnDate] ASC)
+    INCLUDE ([QuestionId], [TabId], [ModuleId], [ResponseType], [UserId], [DisplayName]);
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.objects
+    WHERE object_id = OBJECT_ID(N'{databaseOwner}[{objectQualifier}JacarandaQAPortalSettings]')
+      AND type = N'U'
+)
+BEGIN
+    CREATE TABLE {databaseOwner}[{objectQualifier}JacarandaQAPortalSettings] (
+        [PortalId] INT NOT NULL,
+        [PostingEnabled] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_Posting] DEFAULT ((1)),
+        [GuestPostingEnabled] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_Guests] DEFAULT ((0)),
+        [RequireRegisteredModeration] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_RegMod] DEFAULT ((1)),
+        [EnableLanguageFilter] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_Language] DEFAULT ((0)),
+        [BlockedLanguageTerms] NVARCHAR(MAX) NULL,
+        [MaximumQuestionLength] INT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_QMax] DEFAULT ((4000)),
+        [MaximumResponseLength] INT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_RMax] DEFAULT ((4000)),
+        [EnableRateLimiting] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_Rate] DEFAULT ((1)),
+        [RateLimitSeconds] INT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_RateSeconds] DEFAULT ((60)),
+        [RateLimitMaxPosts] INT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_RatePosts] DEFAULT ((5)),
+        [RateLimitWindowMinutes] INT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_RateWindow] DEFAULT ((15)),
+        [EnableCaptcha] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_Captcha] DEFAULT ((0)),
+        [EnableNotifications] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_Notify] DEFAULT ((0)),
+        [NotificationEmailAddresses] NVARCHAR(2000) NULL,
+        [IncludeSubmissionTextInNotifications] BIT NOT NULL CONSTRAINT [DF_{objectQualifier}JQAPS_NotifyText] DEFAULT ((1)),
+        [ModifiedOnDate] DATETIME NULL,
+        [ModifiedByUserId] INT NULL,
+        CONSTRAINT [PK_{objectQualifier}JacarandaQAPortalSettings] PRIMARY KEY CLUSTERED ([PortalId] ASC)
+    );
+END
+GO

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dotnetnuke type="Package" version="5.0">
+  <packages>
+    <package name="Jacaranda_QandA" type="Module" version="01.00.00">
+      <friendlyName>Jacaranda Q&amp;A</friendlyName>
+      <description>A moderated theological question-and-answer module for DNN 10. Visitors can ask questions, the ministry team can answer, and the original questioner can continue with follow-up questions in the same conversation.</description>
+      <owner>
+        <name>Trevor Forrester</name>
+        <organization>Forrest IT Services</organization>
+        <url>https://forrestitservices.org</url>
+        <email>webmaster@forrestitservices.org</email>
+      </owner>
+      <license src="License.txt" />
+      <releaseNotes src="ReleaseNotes.txt" />
+      <azureCompatible>true</azureCompatible>
+      <dependencies>
+        <dependency type="CoreVersion">10.00.00</dependency>
+      </dependencies>
+      <components>
+        <component type="Script">
+          <scripts>
+            <basePath>DesktopModules\JacarandaQandA</basePath>
+            <script type="Install">
+              <path>Providers\DataProviders\SqlDataProvider</path>
+              <name>01.00.00.SqlDataProvider</name>
+              <version>01.00.00</version>
+            </script>
+            <script type="UnInstall">
+              <path>Providers\DataProviders\SqlDataProvider</path>
+              <name>Uninstall.SqlDataProvider</name>
+              <version>01.00.00</version>
+            </script>
+          </scripts>
+        </component>
+        <component type="ResourceFile">
+          <resourceFiles>
+            <basePath>DesktopModules\JacarandaQandA</basePath>
+            <resourceFile><name>Resources.zip</name></resourceFile>
+          </resourceFiles>
+        </component>
+        <component type="Module">
+          <desktopModule>
+            <moduleName>Jacaranda_QandA</moduleName>
+            <foldername>JacarandaQandA</foldername>
+            <businessControllerClass></businessControllerClass>
+            <moduleDefinitions>
+              <moduleDefinition>
+                <friendlyName>Jacaranda Q&amp;A</friendlyName>
+                <defaultCacheTime>0</defaultCacheTime>
+                <moduleControls>
+                  <moduleControl>
+                    <controlKey />
+                    <controlSrc>DesktopModules/JacarandaQandA/View.ascx</controlSrc>
+                    <supportsPartialRendering>False</supportsPartialRendering>
+                    <supportsPopUps>False</supportsPopUps>
+                    <controlTitle>Jacaranda Q&amp;A</controlTitle>
+                    <controlType>View</controlType>
+                    <viewOrder>0</viewOrder>
+                  </moduleControl>
+                  <moduleControl>
+                    <controlKey>Settings</controlKey>
+                    <controlSrc>DesktopModules/JacarandaQandA/Settings.ascx</controlSrc>
+                    <supportsPartialRendering>False</supportsPartialRendering>
+                    <supportsPopUps>False</supportsPopUps>
+                    <controlTitle>Jacaranda Q&amp;A Settings</controlTitle>
+                    <controlType>Edit</controlType>
+                    <viewOrder>1</viewOrder>
+                  </moduleControl>
+                  <moduleControl>
+                    <controlKey>Administration</controlKey>
+                    <controlSrc>DesktopModules/JacarandaQandA/Administration.ascx</controlSrc>
+                    <supportsPartialRendering>False</supportsPartialRendering>
+                    <supportsPopUps>False</supportsPopUps>
+                    <controlTitle>Jacaranda Q&amp;A Administration</controlTitle>
+                    <controlType>Edit</controlType>
+                    <viewOrder>2</viewOrder>
+                  </moduleControl>
+                </moduleControls>
+              </moduleDefinition>
+            </moduleDefinitions>
+          </desktopModule>
+        </component>
+      </components>
+    </package>
+  </packages>
+</dotnetnuke>
