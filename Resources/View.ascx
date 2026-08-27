@@ -26,8 +26,17 @@
     private const string ConversationCookiePrefix = "JacarandaQA_Conversation_";
     private const string PostMessagePrefix = "JacarandaQA_PostMessage_";
     private const string PostSuccessPrefix = "JacarandaQA_PostSuccess_";
+    private const string PostRedirectStatusQueryKey = "jqaposted";
+    private const string PostRedirectModuleQueryKey = "jqamid";
+    private const string PostRedirectQuestionQueryKey = "jqaqid";
+    private const string PostRedirectMessageAnchorPrefix = "jacaranda-qa-message-";
+    private const string AnswerQuestionQueryKey = "jqaqid";
+    private const string AnswerModuleQueryKey = "jqamid";
+    private const string AnswerActionQueryKey = "jqaaction";
 
     private PortalQaSettings _settings;
+    private int? _focusedAnswerQuestionId;
+    private bool _focusedAnswerMode;
 
     private string QuestionsTable { get { return GetDnnTableName("JacarandaQAQuestions"); } }
     private string ResponsesTable { get { return GetDnnTableName("JacarandaQAResponses"); } }
@@ -36,6 +45,7 @@
     private string SecurityTokenSessionKey { get { return SecurityTokenPrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
     private string PostMessageSessionKey { get { return PostMessagePrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
     private string PostSuccessSessionKey { get { return PostSuccessPrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
+    protected string PostRedirectMessageAnchorId { get { return PostRedirectMessageAnchorPrefix + ModuleId; } }
 
     protected void Page_Load(object sender, EventArgs e)
     {
@@ -43,11 +53,13 @@
         {
             _settings = ReadPortalSettings();
             ConfigurePostingUi();
+            ConfigureAdministrationToolbar();
 
             if (!Page.IsPostBack)
             {
                 EnsureSecurityToken();
                 EnsureCaptchaChallenge();
+                ApplyAdministrationAnswerContext();
                 BindQuestions();
                 ConsumePostRedirectMessage();
             }
@@ -59,16 +71,96 @@
         }
     }
 
+    private void ApplyAdministrationAnswerContext()
+    {
+        if (Request == null || Request.QueryString == null || !CanManagePortalQandA()) return;
+        if (!String.Equals(Request.QueryString[AnswerActionQueryKey], "answer", StringComparison.OrdinalIgnoreCase)) return;
+
+        int requestedModuleId;
+        int questionId;
+        if (!Int32.TryParse(Request.QueryString[AnswerModuleQueryKey], out requestedModuleId) || requestedModuleId != ModuleId) return;
+        if (!Int32.TryParse(Request.QueryString[AnswerQuestionQueryKey], out questionId) || questionId <= 0) return;
+
+        var question = GetQuestion(questionId, true);
+        if (question == null || question.QuestionStatus == 2) return;
+
+        EnterFocusedAnswerMode(question);
+        SetResponseContext(question, true);
+        RegisterAnswerContextFocusScript(question.QuestionId);
+    }
+
+    private void RegisterAnswerContextFocusScript(int questionId)
+    {
+        RegisterResponseContextFocusScript(questionId, false);
+    }
+
+    private void RegisterFollowUpContextFocusScript(int questionId)
+    {
+        RegisterResponseContextFocusScript(questionId, true);
+    }
+
+    private void RegisterResponseContextFocusScript(int questionId, bool focusResponseForm)
+    {
+        if (Page == null) return;
+        var responseId = HttpUtility.JavaScriptStringEncode(pnlResponseForm.ClientID);
+        var questionAnchor = HttpUtility.JavaScriptStringEncode("jqa-question-" + questionId);
+        var focusResponse = focusResponseForm ? "true" : "false";
+        var script = @"
+(function () {
+    var response = document.getElementById('" + responseId + @"');
+    var question = document.getElementById('" + questionAnchor + @"');
+    if (question && response) {
+        try {
+            // Keep the response editor visually attached to the conversation it belongs to.
+            // Appending it to the article places it after the existing answers/follow-ups
+            // and action buttons instead of at the bottom of the complete Q&A page.
+            question.appendChild(response);
+        } catch (moveError) { }
+    }
+    var target = (" + focusResponse + @" && response) ? response : (question || response);
+    if (!target) { return; }
+    window.setTimeout(function () {
+        try {
+            target.setAttribute('tabindex', '-1');
+            target.scrollIntoView({ behavior: 'auto', block: 'start' });
+            target.focus();
+        } catch (e) {
+            try { target.scrollIntoView(true); } catch (ignore) { }
+        }
+    }, 50);
+})();";
+        RegisterStartupScript("JacarandaQandAResponseFocus_" + ModuleId + "_" + questionId + "_" + (focusResponseForm ? "response" : "question"), script);
+    }
+
+    private void EnterFocusedAnswerMode(QuestionRow question)
+    {
+        if (question == null) return;
+        _focusedAnswerMode = true;
+        _focusedAnswerQuestionId = question.QuestionId;
+        pnlAskSection.Visible = false;
+        litQuestionsHeading.Text = "Question to Answer";
+    }
+
     private void ConfigurePostingUi()
     {
         var registered = UserInfo != null && UserInfo.UserID > 0;
         var guestAllowed = _settings.PostingEnabled && _settings.GuestPostingEnabled;
         var canAsk = _settings.PostingEnabled && (registered || guestAllowed);
 
+        pnlAskLauncher.Visible = canAsk;
         pnlAskQuestion.Visible = canAsk;
         pnlGuestIdentity.Visible = !registered && guestAllowed;
         pnlPostingClosed.Visible = !_settings.PostingEnabled;
         pnlLoginRequired.Visible = _settings.PostingEnabled && !registered && !_settings.GuestPostingEnabled;
+
+        // The public question form is intentionally collapsed on a normal page load.
+        // If posting is unavailable, leave the information panel visible so the visitor
+        // can see why a new question cannot currently be submitted.
+        if (!Page.IsPostBack)
+        {
+            pnlAskForm.Visible = !canAsk;
+        }
+        UpdateAskQuestionToggle();
 
         if (registered)
         {
@@ -84,6 +176,150 @@
         txtResponse.MaxLength = _settings.MaximumResponseLength;
         pnlQuestionCaptcha.Visible = CaptchaAppliesToCurrentUser();
         pnlResponseCaptcha.Visible = CaptchaAppliesToCurrentUser();
+    }
+
+    protected void btnToggleAskQuestion_Click(object sender, EventArgs e)
+    {
+        if (_focusedAnswerMode) return;
+
+        _settings = ReadPortalSettings();
+        var registered = UserInfo != null && UserInfo.UserID > 0;
+        var guestAllowed = _settings.PostingEnabled && _settings.GuestPostingEnabled;
+        var canAsk = _settings.PostingEnabled && (registered || guestAllowed);
+        if (!canAsk) return;
+
+        pnlAskForm.Visible = !pnlAskForm.Visible;
+        UpdateAskQuestionToggle();
+
+        if (pnlAskForm.Visible)
+        {
+            RegisterAskQuestionFocusScript();
+        }
+    }
+
+    private void UpdateAskQuestionToggle()
+    {
+        if (btnToggleAskQuestion == null) return;
+        var expanded = pnlAskForm != null && pnlAskForm.Visible;
+        btnToggleAskQuestion.Text = expanded ? "Close Question Form" : "Ask a Question";
+        btnToggleAskQuestion.Attributes["aria-expanded"] = expanded ? "true" : "false";
+        btnToggleAskQuestion.Attributes["aria-controls"] = pnlAskForm == null ? String.Empty : pnlAskForm.ClientID;
+    }
+
+    private void RegisterAskQuestionFocusScript()
+    {
+        if (Page == null || pnlAskForm == null) return;
+        var targetId = HttpUtility.JavaScriptStringEncode(pnlAskForm.ClientID);
+        var script = @"
+(function () {
+    var target = document.getElementById('" + targetId + @"');
+    if (!target) { return; }
+    window.setTimeout(function () {
+        try {
+            target.setAttribute('tabindex', '-1');
+            target.scrollIntoView({ behavior: 'auto', block: 'start' });
+            target.focus();
+        } catch (e) {
+            try { target.scrollIntoView(true); } catch (ignore) { }
+        }
+    }, 30);
+})();";
+        RegisterStartupScript("JacarandaQandAAskFocus_" + ModuleId, script);
+    }
+
+    private void ConfigureAdministrationToolbar()
+    {
+        var canManage = CanManagePortalQandA();
+        pnlAdminToolbar.Visible = canManage;
+        if (!canManage) return;
+
+        var pendingCount = 0;
+        var awaitingCount = 0;
+
+        using (var connection = new SqlConnection(ConnectionString))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+SELECT
+    (SELECT COUNT(1) FROM " + QuestionsTable + @" WHERE PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 0)
+  + (SELECT COUNT(1) FROM " + ResponsesTable + @" WHERE PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 0) AS PendingCount,
+    (SELECT COUNT(1) FROM " + QuestionsTable + @" WHERE PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 1 AND QuestionStatus = 0) AS AwaitingCount;";
+            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            connection.Open();
+            using (var reader = command.ExecuteReader())
+            {
+                if (reader.Read())
+                {
+                    pendingCount = reader["PendingCount"] == DBNull.Value ? 0 : Convert.ToInt32(reader["PendingCount"]);
+                    awaitingCount = reader["AwaitingCount"] == DBNull.Value ? 0 : Convert.ToInt32(reader["AwaitingCount"]);
+                }
+            }
+        }
+
+        litAdminPendingCount.Text = pendingCount.ToString();
+        litAdminAwaitingCount.Text = awaitingCount.ToString();
+
+        var standaloneAdministrationUrl = ResolveStandaloneAdministrationUrl();
+        if (!String.IsNullOrWhiteSpace(standaloneAdministrationUrl))
+        {
+            lnkAdministration.NavigateUrl = standaloneAdministrationUrl;
+            lnkAdministration.ToolTip = "Open the standalone Jacaranda Q&A Administration page";
+            return;
+        }
+
+        try
+        {
+            lnkAdministration.NavigateUrl = EditUrl("Administration");
+            lnkAdministration.ToolTip = "Standalone Q&A Administration has not yet been placed on a DNN page; opening the internal administration control instead.";
+        }
+        catch
+        {
+            lnkAdministration.NavigateUrl = DotNetNuke.Common.Globals.NavigateURL(TabId);
+        }
+    }
+
+    private string ResolveStandaloneAdministrationUrl()
+    {
+        try
+        {
+            var tabsTable = GetDnnTableName("Tabs");
+            var tabModulesTable = GetDnnTableName("TabModules");
+            var modulesTable = GetDnnTableName("Modules");
+            var moduleDefinitionsTable = GetDnnTableName("ModuleDefinitions");
+            var desktopModulesTable = GetDnnTableName("DesktopModules");
+
+            using (var connection = new SqlConnection(ConnectionString))
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+SELECT TOP 1 t.TabID
+FROM " + tabsTable + @" t
+INNER JOIN " + tabModulesTable + @" tm ON tm.TabID = t.TabID
+INNER JOIN " + modulesTable + @" m ON m.ModuleID = tm.ModuleID
+INNER JOIN " + moduleDefinitionsTable + @" md ON md.ModuleDefID = m.ModuleDefID
+INNER JOIN " + desktopModulesTable + @" dm ON dm.DesktopModuleID = md.DesktopModuleID
+WHERE t.PortalID = @PortalId
+  AND ISNULL(t.IsDeleted, 0) = 0
+  AND dm.ModuleName = @AdministrationModuleName
+ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
+                command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                command.Parameters.Add("@CurrentTabId", SqlDbType.Int).Value = TabId;
+                command.Parameters.Add("@AdministrationModuleName", SqlDbType.NVarChar, 128).Value = "Jacaranda_QandA_Administration";
+                connection.Open();
+                var result = command.ExecuteScalar();
+                if (result != null && result != DBNull.Value)
+                {
+                    var administrationTabId = Convert.ToInt32(result);
+                    if (administrationTabId > 0)
+                        return DotNetNuke.Common.Globals.NavigateURL(administrationTabId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Exceptions.LogException(ex);
+        }
+        return String.Empty;
     }
 
     protected void btnSubmitQuestion_Click(object sender, EventArgs e)
@@ -212,18 +448,28 @@
         if (String.Equals(e.CommandName, "Answer", StringComparison.OrdinalIgnoreCase))
         {
             if (!CanManagePortalQandA() || question.QuestionStatus == 2) return;
+            EnterFocusedAnswerMode(question);
             SetResponseContext(question, true);
+            BindQuestions();
+            RegisterAnswerContextFocusScript(question.QuestionId);
         }
         else if (String.Equals(e.CommandName, "FollowUp", StringComparison.OrdinalIgnoreCase))
         {
             if (!CanQuestionerFollowUp(question) || question.QuestionStatus == 2) return;
             SetResponseContext(question, false);
+            RegisterFollowUpContextFocusScript(question.QuestionId);
         }
     }
 
     protected void btnCancelResponse_Click(object sender, EventArgs e)
     {
         ClearResponseContext();
+        _focusedAnswerMode = false;
+        _focusedAnswerQuestionId = null;
+        pnlAskSection.Visible = true;
+        pnlAskForm.Visible = false;
+        UpdateAskQuestionToggle();
+        litQuestionsHeading.Text = "Questions &amp; Answers";
         BindQuestions();
     }
 
@@ -268,21 +514,21 @@
             var questionerFollowUp = !requestedAnswer && CanQuestionerFollowUp(question);
             if (!ministryAnswer && !questionerFollowUp)
             {
-                ShowMessage("You do not have permission to add this response.", false);
+                ShowResponseMessageAndRefocus("You do not have permission to add this response.", question.QuestionId);
                 return;
             }
 
             var text = (txtResponse.Text ?? String.Empty).Trim();
             if (text.Length < MinimumResponseLength || text.Length > _settings.MaximumResponseLength)
             {
-                ShowMessage("Please enter a response between " + MinimumResponseLength + " and " + _settings.MaximumResponseLength + " characters.", false);
+                ShowResponseMessageAndRefocus("Please enter a response between " + MinimumResponseLength + " and " + _settings.MaximumResponseLength + " characters.", question.QuestionId);
                 return;
             }
 
             string captchaError;
             if (!ministryAnswer && !ValidateCaptcha(txtResponseCaptcha, out captchaError))
             {
-                ShowMessage(captchaError, false);
+                ShowResponseMessageAndRefocus(captchaError, question.QuestionId);
                 GenerateCaptchaChallenge();
                 return;
             }
@@ -292,7 +538,7 @@
             string rateError;
             if (!ministryAnswer && !CheckRateLimit(isGuest, guestRateKey, out rateError))
             {
-                ShowMessage(rateError, false);
+                ShowResponseMessageAndRefocus(rateError, question.QuestionId);
                 return;
             }
 
@@ -323,47 +569,177 @@
 
     private void CompletePublicPost(string message, bool success, int questionId)
     {
-        if (Session != null)
-        {
-            Session[PostMessageSessionKey] = message ?? String.Empty;
-            Session[PostSuccessSessionKey] = success;
-        }
+        QueuePostCompletionMessage(message, success);
 
-        try
+        if (TryRedirectAfterSuccessfulPost(questionId))
         {
-            var url = DotNetNuke.Common.Globals.NavigateURL(TabId);
-            url += questionId > 0 ? "#jqa-question-" + questionId : "#jqaAskHeading";
-            Response.Redirect(url, false);
-            Context.ApplicationInstance.CompleteRequest();
             return;
         }
-        catch (Exception ex)
-        {
-            Exceptions.LogException(ex);
-        }
 
+        // Defensive fallback: if DNN/IIS does not honour the redirect for any
+        // reason, complete the UI update in the current request instead of
+        // leaving the visitor with an apparently unchanged form.
         ClearQuestionForm();
         ClearResponseContext();
+        pnlAskForm.Visible = false;
+        UpdateAskQuestionToggle();
         EnsureSecurityToken(true);
         GenerateCaptchaChallenge();
         BindQuestions();
         ShowMessage(message, success);
+        RegisterCompletionFocusScript();
+        ClearQueuedPostCompletionMessage();
+    }
+
+    private void QueuePostCompletionMessage(string message, bool success)
+    {
+        if (Session == null) return;
+        Session[PostMessageSessionKey] = message ?? String.Empty;
+        Session[PostSuccessSessionKey] = success.ToString();
+    }
+
+    private void ClearQueuedPostCompletionMessage()
+    {
+        if (Session == null) return;
+        Session.Remove(PostMessageSessionKey);
+        Session.Remove(PostSuccessSessionKey);
+    }
+
+    private bool TryRedirectAfterSuccessfulPost(int questionId)
+    {
+        if (Response == null) return false;
+
+        var redirectUrl = BuildPostRedirectUrl(questionId);
+        if (String.IsNullOrWhiteSpace(redirectUrl)) return false;
+
+        try
+        {
+            Response.Redirect(redirectUrl, false);
+            if (Context != null && Context.ApplicationInstance != null)
+            {
+                Context.ApplicationInstance.CompleteRequest();
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Exceptions.LogException(ex);
+            return false;
+        }
+    }
+
+    private string BuildPostRedirectUrl(int questionId)
+    {
+        try
+        {
+            var args = new List<string> {
+                PostRedirectStatusQueryKey + "=1",
+                PostRedirectModuleQueryKey + "=" + ModuleId.ToString()
+            };
+
+            if (questionId > 0)
+            {
+                args.Add(PostRedirectQuestionQueryKey + "=" + questionId.ToString());
+            }
+
+            var url = DotNetNuke.Common.Globals.NavigateURL(TabId, String.Empty, args.ToArray());
+            if (String.IsNullOrWhiteSpace(url)) return String.Empty;
+
+            var hashIndex = url.IndexOf('#');
+            if (hashIndex >= 0) url = url.Substring(0, hashIndex);
+
+            return url + "#" + PostRedirectMessageAnchorId;
+        }
+        catch (Exception ex)
+        {
+            Exceptions.LogException(ex);
+            return String.Empty;
+        }
     }
 
     private void ConsumePostRedirectMessage()
     {
         if (Session == null) return;
+
+        // Prefer an explicit completion marker for this module. The queued
+        // session message remains a one-time value, so copied/refreshed URLs
+        // cannot recreate an old success notification.
+        var validRedirect = false;
+        if (Request != null && Request.QueryString != null)
+        {
+            int redirectModuleId;
+            validRedirect = String.Equals(Request.QueryString[PostRedirectStatusQueryKey], "1", StringComparison.Ordinal)
+                && Int32.TryParse(Request.QueryString[PostRedirectModuleQueryKey], out redirectModuleId)
+                && redirectModuleId == ModuleId;
+        }
+
         var message = Convert.ToString(Session[PostMessageSessionKey]);
         if (String.IsNullOrWhiteSpace(message)) return;
+
         var success = true;
         try
         {
-            if (Session[PostSuccessSessionKey] != null) success = Convert.ToBoolean(Session[PostSuccessSessionKey]);
+            if (Session[PostSuccessSessionKey] != null)
+            {
+                success = Convert.ToBoolean(Session[PostSuccessSessionKey]);
+            }
         }
         catch { success = true; }
-        Session.Remove(PostMessageSessionKey);
-        Session.Remove(PostSuccessSessionKey);
+
+        ClearQueuedPostCompletionMessage();
         ShowMessage(message, success);
+        RegisterCompletionFocusScript();
+
+        if (validRedirect)
+        {
+            RegisterCleanPostRedirectUrlScript();
+        }
+    }
+
+    private void RegisterCompletionFocusScript()
+    {
+        if (Page == null) return;
+        var anchorId = HttpUtility.JavaScriptStringEncode(PostRedirectMessageAnchorId);
+        var script = @"
+(function () {
+    var target = document.getElementById('" + anchorId + @"');
+    if (!target) { return; }
+    try { target.setAttribute('tabindex', '-1'); target.focus(); } catch (e) { }
+})();";
+        RegisterStartupScript("JacarandaQandACompletionFocus_" + ModuleId, script);
+    }
+
+    private void RegisterCleanPostRedirectUrlScript()
+    {
+        if (Page == null) return;
+
+        string cleanUrl;
+        try
+        {
+            cleanUrl = DotNetNuke.Common.Globals.NavigateURL(TabId, String.Empty) + "#" + PostRedirectMessageAnchorId;
+        }
+        catch
+        {
+            cleanUrl = "#" + PostRedirectMessageAnchorId;
+        }
+
+        var script = @"
+(function () {
+    if (!window.history || !window.history.replaceState) { return; }
+    try {
+        window.history.replaceState(null, document.title, '" + HttpUtility.JavaScriptStringEncode(cleanUrl) + @"');
+    } catch (e) { }
+})();";
+        RegisterStartupScript("JacarandaQandACleanPostRedirectUrl_" + ModuleId, script);
+    }
+
+    private void RegisterStartupScript(string key, string script)
+    {
+        if (Page == null || String.IsNullOrWhiteSpace(key) || String.IsNullOrWhiteSpace(script)) return;
+        if (Page.ClientScript != null)
+        {
+            Page.ClientScript.RegisterStartupScript(GetType(), key, script, true);
+        }
     }
 
     private int InsertQuestion(string title, string text, string displayName, bool isGuest, string encryptedEmail, string guestRateKey, string conversationHash, bool approved, bool languageFlagged)
@@ -459,11 +835,17 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
 SELECT QuestionId, UserId, DisplayName, GuestConversationTokenHash, QuestionTitle, QuestionText, QuestionStatus,
        IsLanguageFlagged, CreatedOnDate
 FROM " + QuestionsTable + @"
-WHERE PortalId = @PortalId AND TabId = @TabId AND ModuleId = @ModuleId AND IsDeleted = 0 AND IsApproved = 1
+WHERE PortalId = @PortalId AND TabId = @TabId AND ModuleId = @ModuleId AND IsDeleted = 0 AND IsApproved = 1"
+                + (_focusedAnswerMode && _focusedAnswerQuestionId.HasValue ? " AND QuestionId = @FocusedQuestionId" : String.Empty)
+                + @"
 ORDER BY CreatedOnDate DESC, QuestionId DESC;";
             command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
             command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
             command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+            if (_focusedAnswerMode && _focusedAnswerQuestionId.HasValue)
+            {
+                command.Parameters.Add("@FocusedQuestionId", SqlDbType.Int).Value = _focusedAnswerQuestionId.Value;
+            }
             connection.Open();
             using (var reader = command.ExecuteReader())
             {
@@ -640,6 +1022,15 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
         txtResponse.Text = String.Empty;
         txtResponseCaptcha.Text = String.Empty;
         pnlResponseForm.Visible = false;
+    }
+
+    private void ShowResponseMessageAndRefocus(string message, int questionId)
+    {
+        ShowMessage(message, false);
+        if (String.Equals(hdnResponseMode.Value, "answer", StringComparison.Ordinal))
+            RegisterAnswerContextFocusScript(questionId);
+        else
+            RegisterFollowUpContextFocusScript(questionId);
     }
 
     private void ClearQuestionForm()
@@ -1004,7 +1395,11 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
     {
         pnlMessage.Visible = true;
         pnlMessage.CssClass = success ? "jqa-message jqa-message-success" : "jqa-message jqa-message-error";
-        litMessage.Text = HttpUtility.HtmlEncode(message);
+        pnlMessage.Attributes["role"] = success ? "status" : "alert";
+        pnlMessage.Attributes["aria-live"] = success ? "polite" : "assertive";
+        litMessage.Text = success
+            ? "<strong>Process complete.</strong> " + HttpUtility.HtmlEncode(message)
+            : HttpUtility.HtmlEncode(message);
     }
 
     private string GetDnnTableName(string tableName)
@@ -1093,85 +1488,82 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
 </script>
 
 <div class="jacaranda-qa">
-    <asp:Panel ID="pnlMessage" runat="server" Visible="false" CssClass="jqa-message" role="status" aria-live="polite">
-        <asp:Literal ID="litMessage" runat="server" />
+    <asp:Panel ID="pnlAdminToolbar" runat="server" Visible="false" CssClass="jqa-admin-toolbar">
+        <div class="jqa-admin-toolbar-summary">
+            <strong>Q&amp;A Administration</strong>
+            <span><asp:Literal ID="litAdminPendingCount" runat="server" /> pending moderation</span>
+            <span><asp:Literal ID="litAdminAwaitingCount" runat="server" /> awaiting answer</span>
+        </div>
+        <asp:HyperLink ID="lnkAdministration" runat="server" CssClass="jqa-admin-toolbar-link" Text="Open Q&amp;A Administration" />
     </asp:Panel>
+
+    <div id="<%= PostRedirectMessageAnchorId %>" class="jqa-message-anchor">
+        <asp:Panel ID="pnlMessage" runat="server" Visible="false" CssClass="jqa-message" role="status" aria-live="polite">
+            <asp:Literal ID="litMessage" runat="server" />
+        </asp:Panel>
+    </div>
 
     <asp:HiddenField ID="hdnSecurityToken" runat="server" />
 
-    <section class="jqa-ask-panel" aria-labelledby="jqaAskHeading">
-        <h2 id="jqaAskHeading">Ask a Question</h2>
-        <p class="jqa-intro">Questions are moderated so that the conversation can remain gracious, thoughtful and Christ-like.</p>
-
-        <asp:Panel ID="pnlPostingClosed" runat="server" Visible="false" CssClass="jqa-message jqa-message-info">
-            New questions are temporarily closed.
-        </asp:Panel>
-        <asp:Panel ID="pnlLoginRequired" runat="server" Visible="false" CssClass="jqa-message jqa-message-info">
-            Please sign in to ask a question.
+    <asp:Panel ID="pnlAskSection" runat="server" CssClass="jqa-ask-section">
+        <asp:Panel ID="pnlAskLauncher" runat="server" CssClass="jqa-ask-launcher">
+            <asp:LinkButton ID="btnToggleAskQuestion" runat="server" Text="Ask a Question"
+                CssClass="jqa-ask-button" CausesValidation="false"
+                OnClick="btnToggleAskQuestion_Click" />
         </asp:Panel>
 
-        <asp:Panel ID="pnlAskQuestion" runat="server">
-            <asp:Panel ID="pnlRegisteredIdentity" runat="server" Visible="false" CssClass="jqa-identity">
-                Asking as <strong><asp:Literal ID="litQuestionIdentity" runat="server" /></strong>
+        <asp:Panel ID="pnlAskForm" runat="server" Visible="false" CssClass="jqa-ask-panel"
+            role="region" aria-labelledby="jqaAskHeading">
+            <h2 id="jqaAskHeading">Ask a Question</h2>
+            <p class="jqa-intro">Questions are moderated so that the conversation can remain gracious, thoughtful and Christ-like.</p>
+
+            <asp:Panel ID="pnlPostingClosed" runat="server" Visible="false" CssClass="jqa-message jqa-message-info">
+                New questions are temporarily closed.
             </asp:Panel>
-            <asp:Panel ID="pnlGuestIdentity" runat="server" Visible="false">
+            <asp:Panel ID="pnlLoginRequired" runat="server" Visible="false" CssClass="jqa-message jqa-message-info">
+                Please sign in to ask a question.
+            </asp:Panel>
+
+            <asp:Panel ID="pnlAskQuestion" runat="server">
+                <asp:Panel ID="pnlRegisteredIdentity" runat="server" Visible="false" CssClass="jqa-identity">
+                    Asking as <strong><asp:Literal ID="litQuestionIdentity" runat="server" /></strong>
+                </asp:Panel>
+                <asp:Panel ID="pnlGuestIdentity" runat="server" Visible="false">
+                    <div class="jqa-field">
+                        <asp:Label ID="lblGuestName" runat="server" AssociatedControlID="txtGuestName" Text="Name shown publicly" />
+                        <asp:TextBox ID="txtGuestName" runat="server" CssClass="jqa-input" MaxLength="100" />
+                    </div>
+                    <div class="jqa-field">
+                        <asp:Label ID="lblGuestEmail" runat="server" AssociatedControlID="txtGuestEmail" Text="Email (private)" />
+                        <asp:TextBox ID="txtGuestEmail" runat="server" CssClass="jqa-input" MaxLength="254" TextMode="Email" />
+                        <span class="jqa-help">Your email address is used only for this Q&amp;A conversation and is never displayed publicly.</span>
+                    </div>
+                </asp:Panel>
                 <div class="jqa-field">
-                    <asp:Label ID="lblGuestName" runat="server" AssociatedControlID="txtGuestName" Text="Name shown publicly" />
-                    <asp:TextBox ID="txtGuestName" runat="server" CssClass="jqa-input" MaxLength="100" />
+                    <asp:Label ID="lblQuestionTitle" runat="server" AssociatedControlID="txtQuestionTitle" Text="Question title" />
+                    <asp:TextBox ID="txtQuestionTitle" runat="server" CssClass="jqa-input" MaxLength="250" />
                 </div>
                 <div class="jqa-field">
-                    <asp:Label ID="lblGuestEmail" runat="server" AssociatedControlID="txtGuestEmail" Text="Email (private)" />
-                    <asp:TextBox ID="txtGuestEmail" runat="server" CssClass="jqa-input" MaxLength="254" TextMode="Email" />
-                    <span class="jqa-help">Your email address is used only for this Q&amp;A conversation and is never displayed publicly.</span>
+                    <asp:Label ID="lblQuestion" runat="server" AssociatedControlID="txtQuestion" Text="Your question" />
+                    <asp:TextBox ID="txtQuestion" runat="server" CssClass="jqa-textarea" TextMode="MultiLine" Rows="7" />
                 </div>
+                <div class="jqa-honeypot" aria-hidden="true">
+                    <asp:Label ID="lblWebsite" runat="server" AssociatedControlID="txtWebsite" Text="Website" />
+                    <asp:TextBox ID="txtWebsite" runat="server" TabIndex="-1" autocomplete="off" />
+                </div>
+                <asp:Panel ID="pnlQuestionCaptcha" runat="server" Visible="false" CssClass="jqa-field jqa-captcha">
+                    <asp:Label ID="lblQuestionCaptcha" runat="server" AssociatedControlID="txtQuestionCaptcha" Text="Anti-spam question: " />
+                    <asp:Literal ID="litQuestionCaptcha" runat="server" />
+                    <asp:TextBox ID="txtQuestionCaptcha" runat="server" CssClass="jqa-captcha-input" MaxLength="3" />
+                </asp:Panel>
+                <asp:Button ID="btnSubmitQuestion" runat="server" Text="Submit Question" CssClass="jqa-submit" OnClick="btnSubmitQuestion_Click" />
             </asp:Panel>
-            <div class="jqa-field">
-                <asp:Label ID="lblQuestionTitle" runat="server" AssociatedControlID="txtQuestionTitle" Text="Question title" />
-                <asp:TextBox ID="txtQuestionTitle" runat="server" CssClass="jqa-input" MaxLength="250" />
-            </div>
-            <div class="jqa-field">
-                <asp:Label ID="lblQuestion" runat="server" AssociatedControlID="txtQuestion" Text="Your question" />
-                <asp:TextBox ID="txtQuestion" runat="server" CssClass="jqa-textarea" TextMode="MultiLine" Rows="7" />
-            </div>
-            <div class="jqa-honeypot" aria-hidden="true">
-                <asp:Label ID="lblWebsite" runat="server" AssociatedControlID="txtWebsite" Text="Website" />
-                <asp:TextBox ID="txtWebsite" runat="server" TabIndex="-1" autocomplete="off" />
-            </div>
-            <asp:Panel ID="pnlQuestionCaptcha" runat="server" Visible="false" CssClass="jqa-field jqa-captcha">
-                <asp:Label ID="lblQuestionCaptcha" runat="server" AssociatedControlID="txtQuestionCaptcha" Text="Anti-spam question: " />
-                <asp:Literal ID="litQuestionCaptcha" runat="server" />
-                <asp:TextBox ID="txtQuestionCaptcha" runat="server" CssClass="jqa-captcha-input" MaxLength="3" />
-            </asp:Panel>
-            <asp:Button ID="btnSubmitQuestion" runat="server" Text="Submit Question" CssClass="jqa-submit" OnClick="btnSubmitQuestion_Click" />
         </asp:Panel>
-    </section>
-
-    <asp:Panel ID="pnlResponseForm" runat="server" Visible="false" CssClass="jqa-response-form">
-        <h3><asp:Literal ID="litResponseHeading" runat="server" /></h3>
-        <p class="jqa-context-title"><asp:Literal ID="litResponseQuestionTitle" runat="server" /></p>
-        <asp:HiddenField ID="hdnResponseQuestionId" runat="server" />
-        <asp:HiddenField ID="hdnResponseMode" runat="server" />
-        <div class="jqa-field">
-            <asp:Label ID="lblResponse" runat="server" AssociatedControlID="txtResponse" Text="Response" />
-            <asp:TextBox ID="txtResponse" runat="server" CssClass="jqa-textarea" TextMode="MultiLine" Rows="7" />
-        </div>
-        <div class="jqa-honeypot" aria-hidden="true">
-            <asp:Label ID="lblResponseWebsite" runat="server" AssociatedControlID="txtResponseWebsite" Text="Website" />
-            <asp:TextBox ID="txtResponseWebsite" runat="server" TabIndex="-1" autocomplete="off" />
-        </div>
-        <asp:Panel ID="pnlResponseCaptcha" runat="server" Visible="false" CssClass="jqa-field jqa-captcha">
-            <asp:Label ID="lblResponseCaptcha" runat="server" AssociatedControlID="txtResponseCaptcha" Text="Anti-spam question: " />
-            <asp:Literal ID="litResponseCaptcha" runat="server" />
-            <asp:TextBox ID="txtResponseCaptcha" runat="server" CssClass="jqa-captcha-input" MaxLength="3" />
-        </asp:Panel>
-        <div class="jqa-actions">
-            <asp:Button ID="btnSubmitResponse" runat="server" Text="Submit Response" CssClass="jqa-submit" OnClick="btnSubmitResponse_Click" />
-            <asp:Button ID="btnCancelResponse" runat="server" Text="Cancel" CssClass="jqa-secondary-button" CausesValidation="false" OnClick="btnCancelResponse_Click" />
-        </div>
     </asp:Panel>
 
+
     <section class="jqa-conversations" aria-labelledby="jqaQuestionsHeading">
-        <h2 id="jqaQuestionsHeading">Questions &amp; Answers</h2>
+        <h2 id="jqaQuestionsHeading"><asp:Literal ID="litQuestionsHeading" runat="server" Text="Questions &amp; Answers" /></h2>
         <asp:Panel ID="pnlNoQuestions" runat="server" Visible="false" CssClass="jqa-empty">There are no published questions yet.</asp:Panel>
         <asp:Repeater ID="rptQuestions" runat="server" OnItemCommand="rptQuestions_ItemCommand">
             <ItemTemplate>
@@ -1204,5 +1596,30 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
                 </article>
             </ItemTemplate>
         </asp:Repeater>
+
+    <asp:Panel ID="pnlResponseForm" runat="server" Visible="false" CssClass="jqa-response-form">
+        <h3><asp:Literal ID="litResponseHeading" runat="server" /></h3>
+        <p class="jqa-context-title"><asp:Literal ID="litResponseQuestionTitle" runat="server" /></p>
+        <asp:HiddenField ID="hdnResponseQuestionId" runat="server" />
+        <asp:HiddenField ID="hdnResponseMode" runat="server" />
+        <div class="jqa-field">
+            <asp:Label ID="lblResponse" runat="server" AssociatedControlID="txtResponse" Text="Response" />
+            <asp:TextBox ID="txtResponse" runat="server" CssClass="jqa-textarea" TextMode="MultiLine" Rows="7" />
+        </div>
+        <div class="jqa-honeypot" aria-hidden="true">
+            <asp:Label ID="lblResponseWebsite" runat="server" AssociatedControlID="txtResponseWebsite" Text="Website" />
+            <asp:TextBox ID="txtResponseWebsite" runat="server" TabIndex="-1" autocomplete="off" />
+        </div>
+        <asp:Panel ID="pnlResponseCaptcha" runat="server" Visible="false" CssClass="jqa-field jqa-captcha">
+            <asp:Label ID="lblResponseCaptcha" runat="server" AssociatedControlID="txtResponseCaptcha" Text="Anti-spam question: " />
+            <asp:Literal ID="litResponseCaptcha" runat="server" />
+            <asp:TextBox ID="txtResponseCaptcha" runat="server" CssClass="jqa-captcha-input" MaxLength="3" />
+        </asp:Panel>
+        <div class="jqa-actions">
+            <asp:Button ID="btnSubmitResponse" runat="server" Text="Submit Response" CssClass="jqa-submit" OnClick="btnSubmitResponse_Click" />
+            <asp:Button ID="btnCancelResponse" runat="server" Text="Cancel" CssClass="jqa-secondary-button" CausesValidation="false" OnClick="btnCancelResponse_Click" />
+        </div>
+    </asp:Panel>
+
     </section>
 </div>

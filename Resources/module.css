@@ -4,16 +4,48 @@
     max-width: 100%;
     font-size: 1rem;
     line-height: 1.55;
+    background: #F5F5DC;
 }
 .jacaranda-qa *, .jacaranda-qa *::before, .jacaranda-qa *::after { box-sizing: border-box; }
 .jacaranda-qa h2, .jacaranda-qa h3 { line-height: 1.25; }
+
+.jqa-admin-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: .75rem 1rem;
+    margin: 0 0 1rem;
+    padding: .75rem 1rem;
+    border: 1px solid #b7b7b7;
+    border-radius: 6px;
+    background: #F5F5DC;
+}
+.jqa-admin-toolbar-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem 1rem;
+}
+.jqa-admin-toolbar-summary span { color: #555; }
+.jqa-admin-toolbar-link {
+    display: inline-block;
+    padding: .45rem .7rem;
+    border: 1px solid #666;
+    border-radius: 4px;
+    background: #F5F5DC;
+    color: #222;
+    text-decoration: none;
+    font-weight: 700;
+}
+.jqa-admin-toolbar-link:hover, .jqa-admin-toolbar-link:focus { text-decoration: underline; }
 .jqa-intro, .jqa-help, .jqa-meta, .jqa-audit-note { color: #555; }
 .jqa-ask-panel, .jqa-response-form, .jqa-admin-section {
     margin: 0 0 1.5rem;
     padding: 1.25rem;
     border: 1px solid #d7d7d7;
     border-radius: 8px;
-    background: #fff;
+    background: #F5F5DC;
 }
 .jqa-field { margin: 0 0 1rem; }
 .jqa-field label { display: block; font-weight: 600; margin-bottom: .35rem; }
@@ -24,7 +56,7 @@
     border: 1px solid #aaa;
     border-radius: 4px;
     font: inherit;
-    background: #fff;
+    background: #F5F5DC;
     color: #222;
 }
 .jqa-textarea { min-height: 9rem; resize: vertical; }
@@ -49,20 +81,20 @@
 .jqa-submit:hover, .jqa-secondary-button:hover, .jqa-danger-button:hover,
 .jqa-submit:focus, .jqa-secondary-button:focus, .jqa-danger-button:focus { text-decoration: underline; }
 .jqa-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-top: .8rem; }
-.jqa-message { margin: 0 0 1rem; padding: .8rem 1rem; border: 2px solid #777; border-radius: 5px; background: #f7f7f7; }
+.jqa-message { margin: 0 0 1rem; padding: .8rem 1rem; border: 2px solid #777; border-radius: 5px; background: #F5F5DC; }
 .jqa-message-success { border-color: #447b44; }
 .jqa-message-error { border-color: #a43e3e; }
 .jqa-message-info { border-color: #607d8b; }
 .jqa-conversations > h2 { margin-top: 2rem; }
-.jqa-question { margin: 0 0 1.5rem; border: 1px solid #ccc; border-radius: 8px; overflow: hidden; background: #fff; }
-.jqa-question-header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; padding: 1rem 1.1rem; border-bottom: 1px solid #ddd; background: #f8f8f8; }
+.jqa-question { scroll-margin-top: 1rem; margin: 0 0 1.5rem; border: 1px solid #ccc; border-radius: 8px; overflow: hidden; background: #F5F5DC; }
+.jqa-question-header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; padding: 1rem 1.1rem; border-bottom: 1px solid #ddd; background: #F5F5DC; }
 .jqa-question-header h3 { margin: 0 0 .35rem; }
 .jqa-status { display: inline-block; flex: 0 0 auto; padding: .25rem .55rem; border: 1px solid #999; border-radius: 999px; font-size: .88em; font-weight: 700; white-space: nowrap; }
 .jqa-question-text, .jqa-response-text, .jqa-admin-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .jqa-question-text { padding: 1.1rem; }
-.jqa-response { margin: 0 1.1rem 1rem; padding: 1rem; border-left: 4px solid #999; background: #fafafa; }
-.jqa-ministry-answer { border-left-width: 6px; background: #f4f7f4; }
-.jqa-questioner-followup { background: #f8f8f8; }
+.jqa-response { margin: 0 1.1rem 1rem; padding: 1rem; border-left: 4px solid #999; background: #F5F5DC; }
+.jqa-ministry-answer { border-left-width: 6px; background: #F5F5DC; }
+.jqa-questioner-followup { background: #F5F5DC; }
 .jqa-response-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; margin-bottom: .6rem; }
 .jqa-response-heading > strong { font-size: 1.03em; }
 .jqa-response-heading > span { color: #555; font-size: .92em; }
@@ -82,8 +114,139 @@
 .jqa-count { display: inline-block; min-width: 1.6rem; padding: .1rem .4rem; border: 1px solid #999; border-radius: 999px; text-align: center; font-size: .85em; }
 .jqa-setting-warning { font-weight: 700; }
 @media (max-width: 640px) {
+    .jqa-admin-toolbar { display: block; }
+    .jqa-admin-toolbar-summary { display: block; }
+    .jqa-admin-toolbar-summary span { display: block; margin-top: .2rem; }
+    .jqa-admin-toolbar-link { margin-top: .7rem; }
     .jqa-question-header, .jqa-admin-item-header, .jqa-admin-question-row { display: block; }
     .jqa-status { margin-top: .7rem; }
     .jqa-response-heading { display: block; }
     .jqa-response-heading > span { display: block; margin-top: .2rem; }
+}
+
+.jqa-message-anchor { scroll-margin-top: 1rem; outline: none; }
+
+
+/* 01.00.05 eye-relief palette: all Jacaranda Q&A module surfaces use beige. */
+.jacaranda-qa,
+.jqa-admin-toolbar,
+.jqa-ask-panel,
+.jqa-response-form,
+.jqa-admin-section,
+.jqa-message,
+.jqa-question,
+.jqa-question-header,
+.jqa-response,
+.jqa-ministry-answer,
+.jqa-questioner-followup,
+.jqa-admin-item,
+.jqa-settings-section,
+.jqa-settings-section fieldset {
+    background: #F5F5DC;
+}
+
+/* Keep interactive controls distinct against the eye-relief module background. */
+.jqa-input, .jqa-textarea, .jqa-small-input, .jqa-captcha-input,
+.jqa-admin-toolbar-link { background: #fff; }
+.jqa-submit, .jqa-secondary-button, .jqa-danger-button { background: #f4f4f4; }
+
+/* 01.00.06 administration tabs, dashboard and pagination. */
+.jqa-admin-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .45rem;
+    margin: 0 0 1rem;
+    padding: .65rem;
+    border: 1px solid #b7b7b7;
+    border-radius: 7px;
+    background: #F5F5DC;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+.jqa-admin-tab {
+    display: inline-block;
+    padding: .55rem .75rem;
+    border: 1px solid #777;
+    border-radius: 4px;
+    background: #fff;
+    color: #222;
+    text-decoration: none;
+    font-weight: 600;
+}
+.jqa-admin-tab:hover, .jqa-admin-tab:focus { text-decoration: underline; }
+.jqa-admin-tab-active {
+    border-width: 2px;
+    border-color: #333;
+    font-weight: 700;
+    text-decoration: underline;
+}
+.jqa-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+}
+.jqa-dashboard-card {
+    padding: 1rem;
+    border: 1px solid #bbb;
+    border-radius: 7px;
+    background: #F5F5DC;
+}
+.jqa-dashboard-card strong {
+    display: block;
+    font-size: 1.8rem;
+    line-height: 1.1;
+    margin-bottom: .35rem;
+}
+.jqa-dashboard-card span {
+    display: block;
+    font-weight: 700;
+    margin-bottom: .65rem;
+}
+.jqa-pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: .6rem;
+    margin-top: 1rem;
+    padding-top: .75rem;
+    border-top: 1px solid #ccc;
+}
+.jqa-pager span { font-weight: 600; }
+.jqa-pager a[disabled], .jqa-pager span.aspNetDisabled { opacity: .5; cursor: default; }
+@media (max-width: 640px) {
+    .jqa-admin-tabs { position: static; display: block; }
+    .jqa-admin-tab { display: block; margin: 0 0 .4rem; }
+    .jqa-pager { justify-content: flex-start; }
+}
+
+/* 01.00.08 compact public question entry. */
+.jqa-ask-section {
+    margin: 0 0 1.25rem;
+}
+.jqa-ask-launcher {
+    margin: 0 0 1rem;
+}
+.jqa-ask-button {
+    display: inline-block;
+    padding: .7rem 1rem;
+    border: 1px solid #555;
+    border-radius: 6px;
+    background: #fff;
+    color: #222;
+    text-decoration: none;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+.jqa-ask-button:hover,
+.jqa-ask-button:focus {
+    text-decoration: underline;
+}
+
+/* 01.00.09: keep the shared answer/follow-up editor visually attached to its question. */
+.jqa-question > .jqa-response-form {
+    margin: 0 1.1rem 1.1rem;
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <dotnetnuke type="Package" version="5.0">
   <packages>
-    <package name="Jacaranda_QandA" type="Module" version="01.00.00">
+    <package name="Jacaranda_QandA" type="Module" version="01.00.09">
       <friendlyName>Jacaranda Q&amp;A</friendlyName>
       <description>A moderated theological question-and-answer module for DNN 10. Visitors can ask questions, the ministry team can answer, and the original questioner can continue with follow-up questions in the same conversation.</description>
       <owner>
@@ -74,6 +74,51 @@
                     <controlTitle>Jacaranda Q&amp;A Administration</controlTitle>
                     <controlType>Edit</controlType>
                     <viewOrder>2</viewOrder>
+                  </moduleControl>
+                </moduleControls>
+              </moduleDefinition>
+            </moduleDefinitions>
+          </desktopModule>
+        </component>
+      </components>
+    </package>
+
+    <package name="Jacaranda_QandA_Administration" type="Module" version="01.00.09">
+      <friendlyName>Jacaranda Q&amp;A Administration</friendlyName>
+      <description>Standalone administration module for Jacaranda Q&amp;A moderation, question status management and portal-wide Q&amp;A settings.</description>
+      <owner>
+        <name>Trevor Forrester</name>
+        <organization>Forrest IT Services</organization>
+        <url>https://forrestitservices.org</url>
+        <email>webmaster@forrestitservices.org</email>
+      </owner>
+      <license src="License.txt" />
+      <releaseNotes src="ReleaseNotes.txt" />
+      <azureCompatible>true</azureCompatible>
+      <dependencies>
+        <dependency type="CoreVersion">10.00.00</dependency>
+        <dependency type="package">Jacaranda_QandA</dependency>
+      </dependencies>
+      <components>
+        <component type="Module">
+          <desktopModule>
+            <moduleName>Jacaranda_QandA_Administration</moduleName>
+            <foldername>JacarandaQandA</foldername>
+            <businessControllerClass></businessControllerClass>
+            <moduleDefinitions>
+              <moduleDefinition>
+                <definitionName>Jacaranda_QandA_Administration</definitionName>
+                <friendlyName>Jacaranda Q&amp;A Administration</friendlyName>
+                <defaultCacheTime>0</defaultCacheTime>
+                <moduleControls>
+                  <moduleControl>
+                    <controlKey />
+                    <controlSrc>DesktopModules/JacarandaQandA/Administration.ascx</controlSrc>
+                    <supportsPartialRendering>False</supportsPartialRendering>
+                    <supportsPopUps>False</supportsPopUps>
+                    <controlTitle>Jacaranda Q&amp;A Administration</controlTitle>
+                    <controlType>View</controlType>
+                    <viewOrder>0</viewOrder>
                   </moduleControl>
                 </moduleControls>
               </moduleDefinition>

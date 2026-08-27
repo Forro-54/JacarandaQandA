@@ -32,7 +32,7 @@
     <fieldset class="jqa-settings-section">
         <legend>Central administration</legend>
         <p class="jqa-setting-help">
-            Jacaranda Q&amp;A 01.00.00 uses one portal-wide administration screen for moderation and Q&amp;A-specific configuration. DNN's normal module title, container, visibility and permission settings remain managed by DNN itself.
+            Jacaranda Q&amp;A uses one portal-wide administration screen for moderation and Q&amp;A-specific configuration. From version 01.00.03, Administrators can open it directly from the public Q&amp;A toolbar without entering DNN Edit Mode, or place the separate Jacaranda Q&amp;A Administration module on a secured DNN page. DNN's normal module title, container, visibility and permission settings remain managed by DNN itself.
         </p>
         <asp:Panel ID="pnlPortalSettingsLink" runat="server" Visible="false">
             <asp:HyperLink ID="lnkPortalSettings" runat="server" CssClass="jqa-secondary-button" Text="Open Q&amp;A Administration" />
