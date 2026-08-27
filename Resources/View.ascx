@@ -25,6 +25,8 @@
     private const string SecurityTokenPrefix = "JacarandaQA_SecurityToken_";
     private const string CaptchaAnswerKey = "JacarandaQA_CaptchaAnswer";
     private const string ConversationCookiePrefix = "JacarandaQA_Conversation_";
+    private const string GuestBrowserCookiePrefix = "JacarandaQA_GuestBrowser_";
+    private const string GuestBrowserSessionKeyPrefix = "JacarandaQA_GuestBrowserSession_";
     private const string GuestEditTokenSessionKeyPrefix = "JacarandaQA_GuestEditToken_";
     private const string GuestEditQuestionSessionKeyPrefix = "JacarandaQA_GuestEditQuestion_";
     private const string PostMessagePrefix = "JacarandaQA_PostMessage_";
@@ -48,6 +50,7 @@
     private string ConnectionString { get { return Config.GetConnectionString(); } }
     private string SecurityTokenSessionKey { get { return SecurityTokenPrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
     private string GuestEditTokenSessionKey { get { return GuestEditTokenSessionKeyPrefix + PortalId + "_" + TabId + "_" + ModuleId; } }
+    private string GuestBrowserSessionKey { get { return GuestBrowserSessionKeyPrefix + PortalId; } }
     private string GuestEditQuestionSessionKey { get { return GuestEditQuestionSessionKeyPrefix + PortalId + "_" + TabId + "_" + ModuleId; } }
     protected string GuestCorrectionCountdownId { get { return "jqa-guest-correction-countdown-" + ModuleId; } }
     private string PostMessageSessionKey { get { return PostMessagePrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
@@ -91,7 +94,7 @@
         if (!Int32.TryParse(Request.QueryString[AnswerQuestionQueryKey], out questionId) || questionId <= 0) return;
 
         var question = GetQuestion(questionId, true);
-        if (question == null || question.QuestionStatus == 2) return;
+        if (question == null || question.QuestionStatus != 0) return;
 
         EnterFocusedAnswerMode(question);
         SetResponseContext(question, true);
@@ -456,6 +459,12 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
                 }
             }
 
+            if (HasActiveQuestionForCurrentQuestioner(isGuest, guestRateKey))
+            {
+                ShowMessage("You already have a question or follow-up awaiting moderation or an answer. Jacaranda Q&A accepts one active question at a time. Please continue that conversation or wait until it has been answered.", false);
+                return;
+            }
+
             string captchaError;
             if (!ValidateCaptcha(txtQuestionCaptcha, out captchaError))
             {
@@ -474,6 +483,11 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
             var languageFlagged = ContainsBlockedLanguage(title + " " + text);
             var approved = CanManagePortalQandA() || (!isGuest && !_settings.RequireRegisteredModeration);
             var questionId = InsertQuestion(title, text, displayName, isGuest, encryptedGuestEmail, guestRateKey, guestEditTokenHash, conversationHash, approved, languageFlagged);
+            if (questionId <= 0)
+            {
+                ShowMessage("You already have a question or follow-up awaiting moderation or an answer. Jacaranda Q&A accepts one active question at a time.", false);
+                return;
+            }
 
             if (isGuest && questionId > 0)
             {
@@ -506,7 +520,7 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
 
         if (String.Equals(e.CommandName, "Answer", StringComparison.OrdinalIgnoreCase))
         {
-            if (!CanManagePortalQandA() || question.QuestionStatus == 2) return;
+            if (!CanManagePortalQandA() || question.QuestionStatus != 0) return;
             EnterFocusedAnswerMode(question);
             SetResponseContext(question, true);
             BindQuestions();
@@ -571,7 +585,7 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
             }
 
             var requestedAnswer = String.Equals(hdnResponseMode.Value, "answer", StringComparison.Ordinal);
-            var ministryAnswer = requestedAnswer && CanManagePortalQandA();
+            var ministryAnswer = requestedAnswer && CanManagePortalQandA() && question.QuestionStatus == 0;
             var questionerFollowUp = !requestedAnswer && CanQuestionerFollowUp(question);
             if (!ministryAnswer && !questionerFollowUp)
             {
@@ -608,10 +622,13 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
             var approved = ministryAnswer || (!isGuest && !_settings.RequireRegisteredModeration);
             var languageFlagged = ContainsBlockedLanguage(text);
             var responseId = InsertResponse(question, responseType, displayName, text, isGuest, guestRateKey, approved, languageFlagged);
-
-            if (approved)
+            if (responseId <= 0)
             {
-                UpdateQuestionStatus(question.QuestionId, ministryAnswer ? 1 : 0);
+                var blockedMessage = ministryAnswer
+                    ? "This question is no longer awaiting an answer."
+                    : "A follow-up is already awaiting moderation or this question is no longer ready for another follow-up.";
+                ShowResponseMessageAndRefocus(blockedMessage, question.QuestionId);
+                return;
             }
 
             SendNotificationEmail(question.QuestionId, question.QuestionTitle, displayName, text, isGuest, String.Empty, approved, true, languageFlagged);
@@ -807,9 +824,47 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
     private int InsertQuestion(string title, string text, string displayName, bool isGuest, string encryptedEmail, string guestRateKey, string guestEditTokenHash, string conversationHash, bool approved, bool languageFlagged)
     {
         using (var connection = new SqlConnection(ConnectionString))
-        using (var command = connection.CreateCommand())
         {
-            command.CommandText = @"
+            connection.Open();
+            using (var transaction = connection.BeginTransaction(IsolationLevel.Serializable))
+            {
+                try
+                {
+                    using (var guard = connection.CreateCommand())
+                    {
+                        guard.Transaction = transaction;
+                        guard.CommandText = @"
+SELECT COUNT(1)
+FROM " + QuestionsTable + @" q WITH (UPDLOCK, HOLDLOCK)
+WHERE q.PortalId = @PortalId
+  AND q.IsDeleted = 0
+  AND q.QuestionStatus <> 2
+  AND ((@IsGuest = 0 AND q.UserId = @UserId)
+       OR (@IsGuest = 1 AND q.UserId IS NULL AND q.GuestRateLimitKey = @GuestRateLimitKey))
+  AND (q.IsApproved = 0
+       OR q.QuestionStatus = 0
+       OR EXISTS (
+            SELECT 1 FROM " + ResponsesTable + @" r WITH (UPDLOCK, HOLDLOCK)
+            WHERE r.QuestionId = q.QuestionId
+              AND r.PortalId = q.PortalId
+              AND r.IsDeleted = 0
+              AND r.IsApproved = 0
+              AND r.ResponseType = 2));";
+                        guard.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                        guard.Parameters.Add("@IsGuest", SqlDbType.Bit).Value = isGuest;
+                        guard.Parameters.Add("@UserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
+                        guard.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = isGuest ? (object)(guestRateKey ?? String.Empty) : DBNull.Value;
+                        if (Convert.ToInt32(guard.ExecuteScalar()) > 0)
+                        {
+                            transaction.Rollback();
+                            return 0;
+                        }
+                    }
+
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = @"
 INSERT INTO " + QuestionsTable + @"
 (PortalId, TabId, ModuleId, UserId, DisplayName, GuestEmailEncrypted, GuestRateLimitKey, GuestEditTokenHash, GuestConversationTokenHash,
  QuestionTitle, QuestionText, QuestionStatus, IsApproved, IsDeleted, IsLanguageFlagged, CreatedOnDate, CreatedByUserId)
@@ -817,31 +872,103 @@ VALUES
 (@PortalId, @TabId, @ModuleId, @UserId, @DisplayName, @GuestEmailEncrypted, @GuestRateLimitKey, @GuestEditTokenHash, @GuestConversationTokenHash,
  @QuestionTitle, @QuestionText, 0, @IsApproved, 0, @IsLanguageFlagged, GETUTCDATE(), @CreatedByUserId);
 SELECT CAST(SCOPE_IDENTITY() AS INT);";
-            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
-            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
-            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
-            command.Parameters.Add("@UserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
-            command.Parameters.Add("@DisplayName", SqlDbType.NVarChar, 100).Value = Truncate(displayName, 100);
-            command.Parameters.Add("@GuestEmailEncrypted", SqlDbType.NVarChar, 2048).Value = isGuest ? (object)encryptedEmail : DBNull.Value;
-            command.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestRateKey : DBNull.Value;
-            command.Parameters.Add("@GuestEditTokenHash", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestEditTokenHash : DBNull.Value;
-            command.Parameters.Add("@GuestConversationTokenHash", SqlDbType.NVarChar, 64).Value = isGuest ? (object)conversationHash : DBNull.Value;
-            command.Parameters.Add("@QuestionTitle", SqlDbType.NVarChar, 250).Value = title;
-            command.Parameters.Add("@QuestionText", SqlDbType.NVarChar, _settings.MaximumQuestionLength).Value = text;
-            command.Parameters.Add("@IsApproved", SqlDbType.Bit).Value = approved;
-            command.Parameters.Add("@IsLanguageFlagged", SqlDbType.Bit).Value = languageFlagged;
-            command.Parameters.Add("@CreatedByUserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
-            connection.Open();
-            return Convert.ToInt32(command.ExecuteScalar());
+                        command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                        command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                        command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                        command.Parameters.Add("@UserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
+                        command.Parameters.Add("@DisplayName", SqlDbType.NVarChar, 100).Value = Truncate(displayName, 100);
+                        command.Parameters.Add("@GuestEmailEncrypted", SqlDbType.NVarChar, 2048).Value = isGuest ? (object)encryptedEmail : DBNull.Value;
+                        command.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestRateKey : DBNull.Value;
+                        command.Parameters.Add("@GuestEditTokenHash", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestEditTokenHash : DBNull.Value;
+                        command.Parameters.Add("@GuestConversationTokenHash", SqlDbType.NVarChar, 64).Value = isGuest ? (object)conversationHash : DBNull.Value;
+                        command.Parameters.Add("@QuestionTitle", SqlDbType.NVarChar, 250).Value = title;
+                        command.Parameters.Add("@QuestionText", SqlDbType.NVarChar, _settings.MaximumQuestionLength).Value = text;
+                        command.Parameters.Add("@IsApproved", SqlDbType.Bit).Value = approved;
+                        command.Parameters.Add("@IsLanguageFlagged", SqlDbType.Bit).Value = languageFlagged;
+                        command.Parameters.Add("@CreatedByUserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
+                        var questionId = Convert.ToInt32(command.ExecuteScalar());
+                        transaction.Commit();
+                        return questionId;
+                    }
+                }
+                catch
+                {
+                    try { transaction.Rollback(); } catch { }
+                    throw;
+                }
+            }
         }
     }
 
     private int InsertResponse(QuestionRow question, int responseType, string displayName, string text, bool isGuest, string guestRateKey, bool approved, bool languageFlagged)
     {
         using (var connection = new SqlConnection(ConnectionString))
-        using (var command = connection.CreateCommand())
         {
-            command.CommandText = @"
+            connection.Open();
+            using (var transaction = connection.BeginTransaction(IsolationLevel.Serializable))
+            {
+                try
+                {
+                    int currentStatus;
+                    using (var guard = connection.CreateCommand())
+                    {
+                        guard.Transaction = transaction;
+                        guard.CommandText = @"
+SELECT QuestionStatus
+FROM " + QuestionsTable + @" WITH (UPDLOCK, HOLDLOCK)
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
+  AND IsDeleted = 0
+  AND IsApproved = 1;";
+                        guard.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                        guard.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                        guard.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                        guard.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                        var rawStatus = guard.ExecuteScalar();
+                        if (rawStatus == null || rawStatus == DBNull.Value)
+                        {
+                            transaction.Rollback();
+                            return 0;
+                        }
+                        currentStatus = Convert.ToInt32(rawStatus);
+                    }
+
+                    if ((responseType == 1 && currentStatus != 0) || (responseType == 2 && currentStatus != 1))
+                    {
+                        transaction.Rollback();
+                        return 0;
+                    }
+
+                    if (responseType == 2)
+                    {
+                        using (var pending = connection.CreateCommand())
+                        {
+                            pending.Transaction = transaction;
+                            pending.CommandText = @"
+SELECT COUNT(1)
+FROM " + ResponsesTable + @" WITH (UPDLOCK, HOLDLOCK)
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND IsDeleted = 0
+  AND IsApproved = 0
+  AND ResponseType = 2;";
+                            pending.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                            pending.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                            if (Convert.ToInt32(pending.ExecuteScalar()) > 0)
+                            {
+                                transaction.Rollback();
+                                return 0;
+                            }
+                        }
+                    }
+
+                    int responseId;
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = @"
 INSERT INTO " + ResponsesTable + @"
 (QuestionId, PortalId, TabId, ModuleId, ResponseType, UserId, DisplayName, ResponseText, GuestRateLimitKey,
  IsApproved, IsDeleted, IsLanguageFlagged, CreatedOnDate, CreatedByUserId)
@@ -849,20 +976,55 @@ VALUES
 (@QuestionId, @PortalId, @TabId, @ModuleId, @ResponseType, @UserId, @DisplayName, @ResponseText, @GuestRateLimitKey,
  @IsApproved, 0, @IsLanguageFlagged, GETUTCDATE(), @CreatedByUserId);
 SELECT CAST(SCOPE_IDENTITY() AS INT);";
-            command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
-            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
-            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
-            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
-            command.Parameters.Add("@ResponseType", SqlDbType.TinyInt).Value = responseType;
-            command.Parameters.Add("@UserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
-            command.Parameters.Add("@DisplayName", SqlDbType.NVarChar, 100).Value = Truncate(displayName, 100);
-            command.Parameters.Add("@ResponseText", SqlDbType.NVarChar, _settings.MaximumResponseLength).Value = text;
-            command.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestRateKey : DBNull.Value;
-            command.Parameters.Add("@IsApproved", SqlDbType.Bit).Value = approved;
-            command.Parameters.Add("@IsLanguageFlagged", SqlDbType.Bit).Value = languageFlagged;
-            command.Parameters.Add("@CreatedByUserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
-            connection.Open();
-            return Convert.ToInt32(command.ExecuteScalar());
+                        command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                        command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                        command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                        command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                        command.Parameters.Add("@ResponseType", SqlDbType.TinyInt).Value = responseType;
+                        command.Parameters.Add("@UserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
+                        command.Parameters.Add("@DisplayName", SqlDbType.NVarChar, 100).Value = Truncate(displayName, 100);
+                        command.Parameters.Add("@ResponseText", SqlDbType.NVarChar, _settings.MaximumResponseLength).Value = text;
+                        command.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestRateKey : DBNull.Value;
+                        command.Parameters.Add("@IsApproved", SqlDbType.Bit).Value = approved;
+                        command.Parameters.Add("@IsLanguageFlagged", SqlDbType.Bit).Value = languageFlagged;
+                        command.Parameters.Add("@CreatedByUserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
+                        responseId = Convert.ToInt32(command.ExecuteScalar());
+                    }
+
+                    if (approved)
+                    {
+                        using (var update = connection.CreateCommand())
+                        {
+                            update.Transaction = transaction;
+                            update.CommandText = @"
+UPDATE " + QuestionsTable + @"
+SET QuestionStatus = @Status,
+    LastModifiedOnDate = GETUTCDATE(),
+    LastModifiedByUserId = @UserId
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
+  AND IsDeleted = 0;";
+                            update.Parameters.Add("@Status", SqlDbType.TinyInt).Value = responseType == 1 ? 1 : 0;
+                            update.Parameters.Add("@UserId", SqlDbType.Int).Value = UserId > 0 ? (object)UserId : DBNull.Value;
+                            update.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                            update.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                            update.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                            update.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                            update.ExecuteNonQuery();
+                        }
+                    }
+
+                    transaction.Commit();
+                    return responseId;
+                }
+                catch
+                {
+                    try { transaction.Rollback(); } catch { }
+                    throw;
+                }
+            }
         }
     }
 
@@ -1008,7 +1170,7 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
     protected bool CanShowAnswerButton(object dataItem)
     {
         var question = dataItem as QuestionRow;
-        return question != null && question.QuestionStatus != 2 && CanManagePortalQandA();
+        return question != null && question.QuestionStatus == 0 && CanManagePortalQandA();
     }
 
     protected bool CanShowFollowUpButton(object dataItem)
@@ -1069,9 +1231,31 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
     private bool CanQuestionerFollowUp(QuestionRow question)
     {
         if (question == null || question.QuestionStatus != 1) return false;
+        if (HasPendingQuestionerFollowUp(question.QuestionId)) return false;
         if (question.UserId.HasValue && question.UserId.Value > 0)
             return UserInfo != null && UserInfo.UserID == question.UserId.Value;
         return ValidateConversationCookie(question);
+    }
+
+    private bool HasPendingQuestionerFollowUp(int questionId)
+    {
+        if (questionId <= 0) return false;
+        using (var connection = new SqlConnection(ConnectionString))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+SELECT COUNT(1)
+FROM " + ResponsesTable + @"
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND IsDeleted = 0
+  AND IsApproved = 0
+  AND ResponseType = 2;";
+            command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = questionId;
+            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            connection.Open();
+            return Convert.ToInt32(command.ExecuteScalar()) > 0;
+        }
     }
 
     private bool CanManagePortalQandA()
@@ -1169,6 +1353,105 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
             return false;
         }
         return true;
+    }
+
+    private bool HasActiveQuestionForCurrentQuestioner(bool isGuest, string guestRateKey)
+    {
+        if (!isGuest)
+        {
+            if (UserInfo == null || UserInfo.UserID <= 0) return false;
+            using (var connection = new SqlConnection(ConnectionString))
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+SELECT COUNT(1)
+FROM " + QuestionsTable + @" q
+WHERE q.PortalId = @PortalId
+  AND q.UserId = @UserId
+  AND q.IsDeleted = 0
+  AND q.QuestionStatus <> 2
+  AND (q.IsApproved = 0
+       OR q.QuestionStatus = 0
+       OR EXISTS (
+            SELECT 1 FROM " + ResponsesTable + @" r
+            WHERE r.QuestionId = q.QuestionId
+              AND r.PortalId = q.PortalId
+              AND r.IsDeleted = 0
+              AND r.IsApproved = 0
+              AND r.ResponseType = 2));";
+                command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                command.Parameters.Add("@UserId", SqlDbType.Int).Value = UserInfo.UserID;
+                connection.Open();
+                return Convert.ToInt32(command.ExecuteScalar()) > 0;
+            }
+        }
+
+        if (String.IsNullOrWhiteSpace(guestRateKey)) return false;
+
+        using (var connection = new SqlConnection(ConnectionString))
+        {
+            connection.Open();
+            using (var direct = connection.CreateCommand())
+            {
+                direct.CommandText = @"
+SELECT COUNT(1)
+FROM " + QuestionsTable + @" q
+WHERE q.PortalId = @PortalId
+  AND q.UserId IS NULL
+  AND q.GuestRateLimitKey = @GuestRateLimitKey
+  AND q.IsDeleted = 0
+  AND q.QuestionStatus <> 2
+  AND (q.IsApproved = 0
+       OR q.QuestionStatus = 0
+       OR EXISTS (
+            SELECT 1 FROM " + ResponsesTable + @" r
+            WHERE r.QuestionId = q.QuestionId
+              AND r.PortalId = q.PortalId
+              AND r.IsDeleted = 0
+              AND r.IsApproved = 0
+              AND r.ResponseType = 2));";
+                direct.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                direct.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = guestRateKey;
+                if (Convert.ToInt32(direct.ExecuteScalar()) > 0) return true;
+            }
+
+            // Compatibility fallback for guest questions created before the persistent
+            // browser identity was introduced. A valid per-question conversation cookie
+            // still proves that this browser owns the active question.
+            using (var legacy = connection.CreateCommand())
+            {
+                legacy.CommandText = @"
+SELECT TOP 100 q.QuestionId, q.ModuleId, q.GuestConversationTokenHash
+FROM " + QuestionsTable + @" q
+WHERE q.PortalId = @PortalId
+  AND q.UserId IS NULL
+  AND q.IsDeleted = 0
+  AND q.QuestionStatus <> 2
+  AND q.CreatedOnDate >= DATEADD(DAY, -180, GETUTCDATE())
+  AND (q.IsApproved = 0
+       OR q.QuestionStatus = 0
+       OR EXISTS (
+            SELECT 1 FROM " + ResponsesTable + @" r
+            WHERE r.QuestionId = q.QuestionId
+              AND r.PortalId = q.PortalId
+              AND r.IsDeleted = 0
+              AND r.IsApproved = 0
+              AND r.ResponseType = 2))
+ORDER BY q.CreatedOnDate DESC;";
+                legacy.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                using (var reader = legacy.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var questionId = Convert.ToInt32(reader["QuestionId"]);
+                        var moduleId = Convert.ToInt32(reader["ModuleId"]);
+                        var storedHash = reader["GuestConversationTokenHash"] == DBNull.Value ? String.Empty : Convert.ToString(reader["GuestConversationTokenHash"]);
+                        if (ValidateConversationCookie(questionId, moduleId, storedHash)) return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private bool CheckRateLimit(bool isGuest, string guestRateKey, out string errorMessage)
@@ -1583,8 +1866,13 @@ WHERE QuestionId = @QuestionId
 
     private string ComputeConversationTokenHash(string token)
     {
+        return ComputeConversationTokenHash(token, ModuleId);
+    }
+
+    private string ComputeConversationTokenHash(string token, int moduleId)
+    {
         if (String.IsNullOrWhiteSpace(token)) return String.Empty;
-        var source = "JacarandaQAConversation|" + PortalId + "|" + ModuleId + "|" + token;
+        var source = "JacarandaQAConversation|" + PortalId + "|" + moduleId + "|" + token;
         using (var sha = SHA256.Create()) return BytesToHex(sha.ComputeHash(Encoding.UTF8.GetBytes(source)));
     }
 
@@ -1602,10 +1890,16 @@ WHERE QuestionId = @QuestionId
 
     private bool ValidateConversationCookie(QuestionRow question)
     {
-        if (Request == null || question == null || String.IsNullOrWhiteSpace(question.GuestConversationTokenHash)) return false;
-        var cookie = Request.Cookies[ConversationCookiePrefix + PortalId + "_" + question.QuestionId];
+        if (question == null) return false;
+        return ValidateConversationCookie(question.QuestionId, ModuleId, question.GuestConversationTokenHash);
+    }
+
+    private bool ValidateConversationCookie(int questionId, int moduleId, string expectedHash)
+    {
+        if (Request == null || questionId <= 0 || moduleId <= 0 || String.IsNullOrWhiteSpace(expectedHash)) return false;
+        var cookie = Request.Cookies[ConversationCookiePrefix + PortalId + "_" + questionId];
         if (cookie == null || String.IsNullOrWhiteSpace(cookie.Value)) return false;
-        return SecureEquals(question.GuestConversationTokenHash, ComputeConversationTokenHash(cookie.Value));
+        return SecureEquals(expectedHash, ComputeConversationTokenHash(cookie.Value, moduleId));
     }
 
     private bool TryProtectGuestEmail(string email, out string protectedEmail)
@@ -1621,14 +1915,38 @@ WHERE QuestionId = @QuestionId
         catch (Exception ex) { Exceptions.LogException(ex); return false; }
     }
 
+    private string GetOrCreateGuestBrowserToken()
+    {
+        var token = String.Empty;
+        if (Request != null)
+        {
+            var cookie = Request.Cookies[GuestBrowserCookiePrefix + PortalId];
+            if (cookie != null) token = (cookie.Value ?? String.Empty).Trim();
+        }
+        if ((token.Length < 20 || token.Length > 128) && Session != null)
+            token = Convert.ToString(Session[GuestBrowserSessionKey]);
+        if (token.Length < 20 || token.Length > 128)
+            token = GenerateSecurityToken();
+
+        if (Session != null) Session[GuestBrowserSessionKey] = token;
+        if (Response != null)
+        {
+            var cookie = new HttpCookie(GuestBrowserCookiePrefix + PortalId, token);
+            cookie.HttpOnly = true;
+            cookie.Secure = Request != null && Request.IsSecureConnection;
+            cookie.Expires = DateTime.UtcNow.AddDays(180);
+            cookie.Path = "/";
+            try { cookie.SameSite = SameSiteMode.Lax; } catch { }
+            Response.Cookies.Set(cookie);
+        }
+        return token;
+    }
+
     private string ComputeGuestRateLimitKey()
     {
-        if (Request == null) return String.Empty;
-        var remote = (Request.UserHostAddress ?? String.Empty).Trim();
-        var agent = (Request.UserAgent ?? String.Empty).Trim();
-        if (agent.Length > 256) agent = agent.Substring(0, 256);
-        if (remote.Length == 0 && agent.Length == 0) return String.Empty;
-        var source = "JacarandaQAGuestRate|" + PortalId + "|" + ModuleId + "|" + remote + "|" + agent;
+        var browserToken = GetOrCreateGuestBrowserToken();
+        if (String.IsNullOrWhiteSpace(browserToken)) return String.Empty;
+        var source = "JacarandaQAGuestRateV2|" + PortalId + "|" + browserToken;
         using (var sha = SHA256.Create()) return BytesToHex(sha.ComputeHash(Encoding.UTF8.GetBytes(source)));
     }
 
@@ -1661,7 +1979,12 @@ WHERE QuestionId = @QuestionId
             + (_settings.IncludeSubmissionTextInNotifications ? "\r\n\r\n" + text : String.Empty);
         foreach (var recipient in recipients)
         {
-            try { Mail.SendEmail(fromAddress, recipient, subject, body); }
+            try
+            {
+                // Force plain text so visitor-supplied content can never cause DNN's
+                // automatic HTML detection to turn a moderator notification into HTML.
+                Mail.SendMail(fromAddress, recipient, String.Empty, subject, body, String.Empty, "text", String.Empty, String.Empty, String.Empty, String.Empty);
+            }
             catch (Exception ex) { Exceptions.LogException(ex); }
         }
     }

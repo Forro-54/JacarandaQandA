@@ -4,7 +4,7 @@ Jacaranda Q&A is an independent DNN 10 WebForms module for moderated theological
 
 ## Version
 
-01.00.11 — One-shot guest correction and collapsed question-title archive.
+01.00.12 — Security and workflow hardening.
 
 ## Physical path
 
@@ -104,3 +104,18 @@ A guest still has up to five minutes after submitting a moderated question to re
 On a normal first visit, published Q&A conversations are collapsed to their **question title and status**. Selecting a question title expands that conversation; opening another question collapses the previously open one. The title control exposes its expanded/collapsed state for assistive technology.
 
 Focused Administrator Answer mode, follow-up actions, post-completion links and direct question/hash links automatically expand the relevant conversation so the action remains attached to its question. No database schema changes are required.
+
+
+## 01.00.12 security and workflow hardening
+
+Moderator notification emails are now forced to **plain text** so visitor-supplied content cannot trigger DNN's automatic HTML-body detection.
+
+Guest rate limiting now uses a persistent cryptographically random browser identity rather than the browser User-Agent. The browser identity is stored in an HttpOnly, SameSite=Lax cookie and a portal-scoped SHA-256 rate key is stored with guest submissions. Existing guest conversation cookies remain supported as a compatibility fallback when enforcing active-question ownership.
+
+The public workflow now enforces **one active question at a time** on the server. A registered user or recognised guest cannot create another top-level question while one of their questions is awaiting moderation/answer, or while one of their follow-ups is awaiting moderation. Once the earlier question is Answered with no pending follow-up, another top-level question may be asked. The final insert repeats this check inside a serializable database transaction to reduce double-submit/race conditions.
+
+Only one pending questioner follow-up is permitted per question. The follow-up button is suppressed while a follow-up awaits moderation, and the response insert rechecks status and pending responses inside a serializable transaction.
+
+Ministry **Answer** is now restricted to questions whose status is **Awaiting Answer**. The public button, direct Administration answer context and final response insert all enforce that state. Publishing an approved ministry answer or approved follow-up updates the question status inside the same transaction as the response insert.
+
+No database schema changes are required; safe in-place upgrade from 01.00.11.
