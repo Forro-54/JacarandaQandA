@@ -4,7 +4,7 @@ Jacaranda Q&A is an independent DNN 10 WebForms module for moderated theological
 
 ## Version
 
-01.00.09 — Inline follow-up response placement.
+01.00.11 — One-shot guest correction and collapsed question-title archive.
 
 ## Physical path
 
@@ -84,3 +84,23 @@ Focused Administrator answer mode continues to hide the public Ask a Question ar
 Selecting **Ask a follow-up** now places the follow-up editor directly inside the selected question conversation, after its existing answers/follow-ups and question actions, instead of rendering the editor at the bottom of the complete Q&A page. The browser moves directly to the follow-up editor.
 
 The shared response editor uses the same question-attached placement for Administrator answers while retaining the focused-answer behaviour introduced in 01.00.07. Response validation errors re-attach and refocus the editor on the selected conversation so the visitor is not sent back to the bottom of the page. No database schema changes are required.
+
+
+## 01.00.10 guest correction and participation guidance
+
+New guest questions that are awaiting moderation now receive a secure **5-minute correction window**. Immediately after submission, the guest is shown the title and question text they submitted and may correct those two fields while the window remains open. The guest's public name and private email cannot be changed.
+
+The correction right uses a separate cryptographically random session credential from the longer-lived guest conversation credential. Only a scoped SHA-256 hash is stored in `GuestEditTokenHash`. Every correction is revalidated server-side against the question ID, portal, page, module, guest ownership token, moderation state, deletion state and original creation time. Once the five-minute window expires or the question is approved, correction is no longer accepted.
+
+The public module now also explains the participation model before a visitor opens the question form: **please ask one question at a time**; Jacaranda Q&A is a moderated question-and-answer ministry rather than an open discussion forum; after an answer is posted, the original questioner may ask a related follow-up.
+
+The **Ask a follow-up** control is now shown only when the question status is **Answered** and the current visitor is verified as the original registered or guest questioner. No database schema changes are required because the guest edit-token field was included in the original 01.00.00 schema.
+
+
+## 01.00.11 one-shot correction and collapsed archive
+
+A guest still has up to five minutes after submitting a moderated question to review it, but the correction opportunity is now **single-use**. Saving one correction atomically clears the stored guest edit-token hash, clears the session credential and returns the visitor to the normal Q&A page with a confirmation. Further corrections are not accepted even if time remains.
+
+On a normal first visit, published Q&A conversations are collapsed to their **question title and status**. Selecting a question title expands that conversation; opening another question collapses the previously open one. The title control exposes its expanded/collapsed state for assistive technology.
+
+Focused Administrator Answer mode, follow-up actions, post-completion links and direct question/hash links automatically expand the relevant conversation so the action remains attached to its question. No database schema changes are required.

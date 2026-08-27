@@ -247,6 +247,66 @@
 }
 
 /* 01.00.09: keep the shared answer/follow-up editor visually attached to its question. */
-.jqa-question > .jqa-response-form {
+.jqa-question > .jqa-response-form,
+.jqa-question-body > .jqa-response-form {
     margin: 0 1.1rem 1.1rem;
+}
+
+/* 01.00.10 public guidance and secure guest correction window. */
+.jqa-guidance {
+    margin: .7rem 0 1rem;
+    padding: .7rem .85rem;
+    border-left: 4px solid #777;
+    background: #F5F5DC;
+    color: #333;
+}
+.jqa-guest-correction {
+    scroll-margin-top: 1rem;
+    margin: 0 0 1.5rem;
+    padding: 1.25rem;
+    border: 2px solid #777;
+    border-radius: 8px;
+    background: #F5F5DC;
+}
+.jqa-guest-correction h2 { margin-top: 0; }
+.jqa-correction-time {
+    display: inline-block;
+    margin: .25rem 0 1rem;
+    padding: .4rem .65rem;
+    border: 1px solid #999;
+    border-radius: 4px;
+    background: #fff;
+}
+
+/* 01.00.11: collapsed question-title archive. */
+.jqa-question-title-button {
+    display: inline-block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+    line-height: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.jqa-question-title-button::after {
+    content: " \25B8";
+    font-size: .85em;
+}
+.jqa-question-expanded .jqa-question-title-button::after {
+    content: " \25BE";
+}
+.jqa-question-title-button:hover,
+.jqa-question-title-button:focus {
+    text-decoration: underline;
+    outline-offset: 3px;
+}
+.jqa-question-body {
+    display: none;
+}
+.jqa-question-expanded .jqa-question-body {
+    display: block;
 }

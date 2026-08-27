@@ -21,9 +21,12 @@
     private const int MaximumGuestEmailLength = 254;
     private const int MaximumBlockedTermCount = 250;
     private const int MaximumBlockedTermLength = 100;
+    private const int GuestEditWindowMinutes = 5;
     private const string SecurityTokenPrefix = "JacarandaQA_SecurityToken_";
     private const string CaptchaAnswerKey = "JacarandaQA_CaptchaAnswer";
     private const string ConversationCookiePrefix = "JacarandaQA_Conversation_";
+    private const string GuestEditTokenSessionKeyPrefix = "JacarandaQA_GuestEditToken_";
+    private const string GuestEditQuestionSessionKeyPrefix = "JacarandaQA_GuestEditQuestion_";
     private const string PostMessagePrefix = "JacarandaQA_PostMessage_";
     private const string PostSuccessPrefix = "JacarandaQA_PostSuccess_";
     private const string PostRedirectStatusQueryKey = "jqaposted";
@@ -37,12 +40,16 @@
     private PortalQaSettings _settings;
     private int? _focusedAnswerQuestionId;
     private bool _focusedAnswerMode;
+    private int? _expandedQuestionId;
 
     private string QuestionsTable { get { return GetDnnTableName("JacarandaQAQuestions"); } }
     private string ResponsesTable { get { return GetDnnTableName("JacarandaQAResponses"); } }
     private string PortalSettingsTable { get { return GetDnnTableName("JacarandaQAPortalSettings"); } }
     private string ConnectionString { get { return Config.GetConnectionString(); } }
     private string SecurityTokenSessionKey { get { return SecurityTokenPrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
+    private string GuestEditTokenSessionKey { get { return GuestEditTokenSessionKeyPrefix + PortalId + "_" + TabId + "_" + ModuleId; } }
+    private string GuestEditQuestionSessionKey { get { return GuestEditQuestionSessionKeyPrefix + PortalId + "_" + TabId + "_" + ModuleId; } }
+    protected string GuestCorrectionCountdownId { get { return "jqa-guest-correction-countdown-" + ModuleId; } }
     private string PostMessageSessionKey { get { return PostMessagePrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
     private string PostSuccessSessionKey { get { return PostSuccessPrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
     protected string PostRedirectMessageAnchorId { get { return PostRedirectMessageAnchorPrefix + ModuleId; } }
@@ -60,7 +67,9 @@
                 EnsureSecurityToken();
                 EnsureCaptchaChallenge();
                 ApplyAdministrationAnswerContext();
+                ApplyQuestionExpansionContext();
                 BindQuestions();
+                LoadGuestCorrectionPanel();
                 ConsumePostRedirectMessage();
             }
         }
@@ -89,6 +98,32 @@
         RegisterAnswerContextFocusScript(question.QuestionId);
     }
 
+
+    private void ApplyQuestionExpansionContext()
+    {
+        if (_focusedAnswerMode && _focusedAnswerQuestionId.HasValue)
+        {
+            _expandedQuestionId = _focusedAnswerQuestionId.Value;
+            return;
+        }
+
+        if (Request == null || Request.QueryString == null) return;
+
+        int requestedModuleId;
+        var rawModuleId = Request.QueryString[AnswerModuleQueryKey];
+        if (!String.IsNullOrWhiteSpace(rawModuleId)
+            && (!Int32.TryParse(rawModuleId, out requestedModuleId) || requestedModuleId != ModuleId))
+        {
+            return;
+        }
+
+        int questionId;
+        if (Int32.TryParse(Request.QueryString[AnswerQuestionQueryKey], out questionId) && questionId > 0)
+        {
+            _expandedQuestionId = questionId;
+        }
+    }
+
     private void RegisterAnswerContextFocusScript(int questionId)
     {
         RegisterResponseContextFocusScript(questionId, false);
@@ -109,12 +144,28 @@
 (function () {
     var response = document.getElementById('" + responseId + @"');
     var question = document.getElementById('" + questionAnchor + @"');
+    if (question) {
+        try {
+            var all = document.querySelectorAll('.jqa-question.jqa-question-expanded');
+            for (var i = 0; i < all.length; i++) {
+                if (all[i] !== question) {
+                    all[i].classList.remove('jqa-question-expanded');
+                    var otherToggle = all[i].querySelector('[data-jqa-question-toggle]');
+                    if (otherToggle) otherToggle.setAttribute('aria-expanded', 'false');
+                }
+            }
+            question.classList.add('jqa-question-expanded');
+            var toggle = question.querySelector('[data-jqa-question-toggle]');
+            if (toggle) toggle.setAttribute('aria-expanded', 'true');
+        } catch (expandError) { }
+    }
     if (question && response) {
         try {
             // Keep the response editor visually attached to the conversation it belongs to.
-            // Appending it to the article places it after the existing answers/follow-ups
-            // and action buttons instead of at the bottom of the complete Q&A page.
-            question.appendChild(response);
+            // Place it inside the collapsible question body after the existing answers,
+            // follow-ups and actions instead of at the bottom of the complete Q&A page.
+            var questionBody = question.querySelector('.jqa-question-body');
+            (questionBody || question).appendChild(response);
         } catch (moveError) { }
     }
     var target = (" + focusResponse + @" && response) ? response : (question || response);
@@ -137,6 +188,7 @@
         if (question == null) return;
         _focusedAnswerMode = true;
         _focusedAnswerQuestionId = question.QuestionId;
+        _expandedQuestionId = question.QuestionId;
         pnlAskSection.Visible = false;
         litQuestionsHeading.Text = "Question to Answer";
     }
@@ -372,6 +424,8 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
             var guestRateKey = isGuest ? ComputeGuestRateLimitKey() : String.Empty;
             var conversationToken = String.Empty;
             var conversationHash = String.Empty;
+            var guestEditToken = String.Empty;
+            var guestEditTokenHash = String.Empty;
 
             if (displayName.Length < 2 || displayName.Length > MaximumDisplayNameLength)
             {
@@ -393,7 +447,9 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
                 }
                 conversationToken = GenerateSecurityToken();
                 conversationHash = ComputeConversationTokenHash(conversationToken);
-                if (String.IsNullOrWhiteSpace(guestRateKey) || String.IsNullOrWhiteSpace(conversationHash))
+                guestEditToken = GenerateSecurityToken();
+                guestEditTokenHash = ComputeGuestEditTokenHash(guestEditToken);
+                if (String.IsNullOrWhiteSpace(guestRateKey) || String.IsNullOrWhiteSpace(conversationHash) || String.IsNullOrWhiteSpace(guestEditTokenHash))
                 {
                     ShowMessage("The secure guest session could not be created. Please try again.", false);
                     return;
@@ -417,18 +473,21 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
 
             var languageFlagged = ContainsBlockedLanguage(title + " " + text);
             var approved = CanManagePortalQandA() || (!isGuest && !_settings.RequireRegisteredModeration);
-            var questionId = InsertQuestion(title, text, displayName, isGuest, encryptedGuestEmail, guestRateKey, conversationHash, approved, languageFlagged);
+            var questionId = InsertQuestion(title, text, displayName, isGuest, encryptedGuestEmail, guestRateKey, guestEditTokenHash, conversationHash, approved, languageFlagged);
 
             if (isGuest && questionId > 0)
             {
                 SetConversationCookie(questionId, conversationToken);
+                SetGuestEditSession(questionId, guestEditToken);
             }
 
             SendNotificationEmail(questionId, title, displayName, text, isGuest, guestEmail, approved, false, languageFlagged);
             var completionMessage = approved
                 ? "Your question has been added and is awaiting an answer."
-                : "Thank you. Your question has been received and is awaiting moderation.";
-            CompletePublicPost(completionMessage, true, approved ? questionId : 0);
+                : (isGuest
+                    ? "Thank you. Your question has been received and is awaiting moderation. You have 5 minutes to review and correct its title or text below."
+                    : "Thank you. Your question has been received and is awaiting moderation.");
+            CompletePublicPost(completionMessage, true, questionId);
         }
         catch (Exception ex)
         {
@@ -456,6 +515,7 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
         else if (String.Equals(e.CommandName, "FollowUp", StringComparison.OrdinalIgnoreCase))
         {
             if (!CanQuestionerFollowUp(question) || question.QuestionStatus == 2) return;
+            _expandedQuestionId = question.QuestionId;
             SetResponseContext(question, false);
             RegisterFollowUpContextFocusScript(question.QuestionId);
         }
@@ -466,6 +526,7 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
         ClearResponseContext();
         _focusedAnswerMode = false;
         _focusedAnswerQuestionId = null;
+        _expandedQuestionId = null;
         pnlAskSection.Visible = true;
         pnlAskForm.Visible = false;
         UpdateAskQuestionToggle();
@@ -586,6 +647,7 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
         EnsureSecurityToken(true);
         GenerateCaptchaChallenge();
         BindQuestions();
+        LoadGuestCorrectionPanel();
         ShowMessage(message, success);
         RegisterCompletionFocusScript();
         ClearQueuedPostCompletionMessage();
@@ -742,17 +804,17 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
         }
     }
 
-    private int InsertQuestion(string title, string text, string displayName, bool isGuest, string encryptedEmail, string guestRateKey, string conversationHash, bool approved, bool languageFlagged)
+    private int InsertQuestion(string title, string text, string displayName, bool isGuest, string encryptedEmail, string guestRateKey, string guestEditTokenHash, string conversationHash, bool approved, bool languageFlagged)
     {
         using (var connection = new SqlConnection(ConnectionString))
         using (var command = connection.CreateCommand())
         {
             command.CommandText = @"
 INSERT INTO " + QuestionsTable + @"
-(PortalId, TabId, ModuleId, UserId, DisplayName, GuestEmailEncrypted, GuestRateLimitKey, GuestConversationTokenHash,
+(PortalId, TabId, ModuleId, UserId, DisplayName, GuestEmailEncrypted, GuestRateLimitKey, GuestEditTokenHash, GuestConversationTokenHash,
  QuestionTitle, QuestionText, QuestionStatus, IsApproved, IsDeleted, IsLanguageFlagged, CreatedOnDate, CreatedByUserId)
 VALUES
-(@PortalId, @TabId, @ModuleId, @UserId, @DisplayName, @GuestEmailEncrypted, @GuestRateLimitKey, @GuestConversationTokenHash,
+(@PortalId, @TabId, @ModuleId, @UserId, @DisplayName, @GuestEmailEncrypted, @GuestRateLimitKey, @GuestEditTokenHash, @GuestConversationTokenHash,
  @QuestionTitle, @QuestionText, 0, @IsApproved, 0, @IsLanguageFlagged, GETUTCDATE(), @CreatedByUserId);
 SELECT CAST(SCOPE_IDENTITY() AS INT);";
             command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
@@ -762,6 +824,7 @@ SELECT CAST(SCOPE_IDENTITY() AS INT);";
             command.Parameters.Add("@DisplayName", SqlDbType.NVarChar, 100).Value = Truncate(displayName, 100);
             command.Parameters.Add("@GuestEmailEncrypted", SqlDbType.NVarChar, 2048).Value = isGuest ? (object)encryptedEmail : DBNull.Value;
             command.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestRateKey : DBNull.Value;
+            command.Parameters.Add("@GuestEditTokenHash", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestEditTokenHash : DBNull.Value;
             command.Parameters.Add("@GuestConversationTokenHash", SqlDbType.NVarChar, 64).Value = isGuest ? (object)conversationHash : DBNull.Value;
             command.Parameters.Add("@QuestionTitle", SqlDbType.NVarChar, 250).Value = title;
             command.Parameters.Add("@QuestionText", SqlDbType.NVarChar, _settings.MaximumQuestionLength).Value = text;
@@ -951,7 +1014,23 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
     protected bool CanShowFollowUpButton(object dataItem)
     {
         var question = dataItem as QuestionRow;
-        return question != null && question.QuestionStatus != 2 && CanQuestionerFollowUp(question);
+        return question != null && question.QuestionStatus == 1 && CanQuestionerFollowUp(question);
+    }
+
+    protected string QuestionCss(object dataItem)
+    {
+        var question = dataItem as QuestionRow;
+        if (question != null && _expandedQuestionId.HasValue && _expandedQuestionId.Value == question.QuestionId)
+            return "jqa-question jqa-question-expanded";
+        return "jqa-question";
+    }
+
+    protected string QuestionExpandedValue(object dataItem)
+    {
+        var question = dataItem as QuestionRow;
+        return question != null && _expandedQuestionId.HasValue && _expandedQuestionId.Value == question.QuestionId
+            ? "true"
+            : "false";
     }
 
     protected string StatusText(object value)
@@ -989,7 +1068,7 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
 
     private bool CanQuestionerFollowUp(QuestionRow question)
     {
-        if (question == null || question.QuestionStatus == 2) return false;
+        if (question == null || question.QuestionStatus != 1) return false;
         if (question.UserId.HasValue && question.UserId.Value > 0)
             return UserInfo != null && UserInfo.UserID == question.UserId.Value;
         return ValidateConversationCookie(question);
@@ -1216,6 +1295,290 @@ WHERE IsDeleted = 0
             diff |= av ^ bv;
         }
         return diff == 0;
+    }
+
+    private string ComputeGuestEditTokenHash(string token)
+    {
+        if (String.IsNullOrWhiteSpace(token)) return String.Empty;
+        var source = "JacarandaQAGuestEdit|" + PortalId + "|" + TabId + "|" + ModuleId + "|" + token;
+        using (var sha = SHA256.Create()) return BytesToHex(sha.ComputeHash(Encoding.UTF8.GetBytes(source)));
+    }
+
+    private void SetGuestEditSession(int questionId, string token)
+    {
+        if (Session == null || questionId <= 0 || String.IsNullOrWhiteSpace(token)) return;
+        Session[GuestEditQuestionSessionKey] = questionId.ToString();
+        Session[GuestEditTokenSessionKey] = token;
+    }
+
+    private void ClearGuestEditSession()
+    {
+        if (Session == null) return;
+        Session.Remove(GuestEditQuestionSessionKey);
+        Session.Remove(GuestEditTokenSessionKey);
+    }
+
+    private bool TryGetGuestEditSession(out int questionId, out string tokenHash)
+    {
+        questionId = 0;
+        tokenHash = String.Empty;
+        if (Session == null) return false;
+        if (UserInfo != null && UserInfo.UserID > 0) return false;
+
+        var rawQuestionId = Convert.ToString(Session[GuestEditQuestionSessionKey]);
+        var token = Convert.ToString(Session[GuestEditTokenSessionKey]);
+        if (!Int32.TryParse(rawQuestionId, out questionId) || questionId <= 0 || String.IsNullOrWhiteSpace(token))
+        {
+            questionId = 0;
+            return false;
+        }
+
+        tokenHash = ComputeGuestEditTokenHash(token);
+        return !String.IsNullOrWhiteSpace(tokenHash);
+    }
+
+    private void LoadGuestCorrectionPanel()
+    {
+        pnlGuestCorrection.Visible = false;
+
+        int questionId;
+        string tokenHash;
+        if (!TryGetGuestEditSession(out questionId, out tokenHash)) return;
+
+        string title;
+        string text;
+        DateTime createdOnUtc;
+        string errorMessage;
+        if (!TryLoadGuestEditableQuestion(questionId, tokenHash, out title, out text, out createdOnUtc, out errorMessage))
+        {
+            ClearGuestEditSession();
+            return;
+        }
+
+        hdnGuestEditQuestionId.Value = questionId.ToString();
+        txtGuestEditTitle.Text = title;
+        txtGuestEditQuestion.Text = text;
+        pnlGuestCorrection.Visible = true;
+        RegisterGuestCorrectionCountdownScript(createdOnUtc.AddMinutes(GuestEditWindowMinutes));
+    }
+
+    private bool TryLoadGuestEditableQuestion(
+        int questionId,
+        string tokenHash,
+        out string title,
+        out string text,
+        out DateTime createdOnUtc,
+        out string errorMessage)
+    {
+        title = String.Empty;
+        text = String.Empty;
+        createdOnUtc = DateTime.MinValue;
+        errorMessage = "The 5-minute correction window is no longer available.";
+
+        if (questionId <= 0 || String.IsNullOrWhiteSpace(tokenHash)) return false;
+
+        using (var connection = new SqlConnection(ConnectionString))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+SELECT TOP 1 QuestionTitle, QuestionText, CreatedOnDate
+FROM " + QuestionsTable + @"
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
+  AND UserId IS NULL
+  AND IsDeleted = 0
+  AND IsApproved = 0
+  AND GuestEditTokenHash = @GuestEditTokenHash
+  AND CreatedOnDate >= DATEADD(MINUTE, -@EditWindowMinutes, GETUTCDATE());";
+            command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = questionId;
+            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+            command.Parameters.Add("@GuestEditTokenHash", SqlDbType.NVarChar, 64).Value = tokenHash;
+            command.Parameters.Add("@EditWindowMinutes", SqlDbType.Int).Value = GuestEditWindowMinutes;
+
+            connection.Open();
+            using (var reader = command.ExecuteReader())
+            {
+                if (!reader.Read()) return false;
+                title = Convert.ToString(reader["QuestionTitle"]);
+                text = Convert.ToString(reader["QuestionText"]);
+                createdOnUtc = DateTime.SpecifyKind(Convert.ToDateTime(reader["CreatedOnDate"]), DateTimeKind.Utc);
+                return true;
+            }
+        }
+    }
+
+    private void RegisterGuestCorrectionCountdownForCurrentQuestion(int questionId, string tokenHash)
+    {
+        string currentTitle;
+        string currentText;
+        DateTime createdOnUtc;
+        string errorMessage;
+        if (TryLoadGuestEditableQuestion(questionId, tokenHash, out currentTitle, out currentText, out createdOnUtc, out errorMessage))
+        {
+            RegisterGuestCorrectionCountdownScript(createdOnUtc.AddMinutes(GuestEditWindowMinutes));
+        }
+    }
+
+    protected void btnSaveGuestCorrection_Click(object sender, EventArgs e)
+    {
+        try
+        {
+            _settings = ReadPortalSettings();
+
+            if (!ValidateSecurityToken())
+            {
+                ShowMessage("The form security token expired. Please refresh the page and try again.", false);
+                return;
+            }
+
+            int sessionQuestionId;
+            string tokenHash;
+            int questionId;
+            if (!TryGetGuestEditSession(out sessionQuestionId, out tokenHash)
+                || !Int32.TryParse((hdnGuestEditQuestionId.Value ?? String.Empty).Trim(), out questionId)
+                || questionId <= 0
+                || questionId != sessionQuestionId)
+            {
+                ClearGuestEditSession();
+                pnlGuestCorrection.Visible = false;
+                ShowMessage("The 5-minute correction window is no longer available.", false);
+                return;
+            }
+
+            var title = NormalizeSingleLineText(txtGuestEditTitle.Text);
+            var text = (txtGuestEditQuestion.Text ?? String.Empty).Trim();
+            if (title.Length < 3 || title.Length > MaximumQuestionTitleLength)
+            {
+                pnlGuestCorrection.Visible = true;
+                ShowMessage("Please enter a question title between 3 and 250 characters.", false);
+                RegisterGuestCorrectionCountdownForCurrentQuestion(questionId, tokenHash);
+                RegisterGuestCorrectionFocusScript();
+                return;
+            }
+            if (text.Length < MinimumQuestionLength || text.Length > _settings.MaximumQuestionLength)
+            {
+                pnlGuestCorrection.Visible = true;
+                ShowMessage("Please enter a question between " + MinimumQuestionLength + " and " + _settings.MaximumQuestionLength + " characters.", false);
+                RegisterGuestCorrectionCountdownForCurrentQuestion(questionId, tokenHash);
+                RegisterGuestCorrectionFocusScript();
+                return;
+            }
+
+            var languageFlagged = ContainsBlockedLanguage(title + " " + text);
+            if (!TryUpdateGuestQuestion(questionId, tokenHash, title, text, languageFlagged))
+            {
+                ClearGuestEditSession();
+                pnlGuestCorrection.Visible = false;
+                ShowMessage("The question could not be corrected. The 5-minute window may have expired or the question may already have been approved.", false);
+                return;
+            }
+
+            ClearGuestEditSession();
+            pnlGuestCorrection.Visible = false;
+            CompletePublicPost("Correction saved. Your question is now awaiting moderation. The correction opportunity is now closed.", true, 0);
+            return;
+        }
+        catch (Exception ex)
+        {
+            Exceptions.LogException(ex);
+            ShowMessage("The question could not be corrected. Please try again.", false);
+        }
+    }
+
+    private bool TryUpdateGuestQuestion(int questionId, string tokenHash, string title, string text, bool languageFlagged)
+    {
+        using (var connection = new SqlConnection(ConnectionString))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+UPDATE " + QuestionsTable + @"
+SET QuestionTitle = @QuestionTitle,
+    QuestionText = @QuestionText,
+    IsLanguageFlagged = @IsLanguageFlagged,
+    EditedOnDate = GETUTCDATE(),
+    EditedByUserId = NULL,
+    LastModifiedOnDate = GETUTCDATE(),
+    LastModifiedByUserId = NULL,
+    GuestEditTokenHash = NULL
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
+  AND UserId IS NULL
+  AND IsDeleted = 0
+  AND IsApproved = 0
+  AND GuestEditTokenHash = @GuestEditTokenHash
+  AND CreatedOnDate >= DATEADD(MINUTE, -@EditWindowMinutes, GETUTCDATE());";
+            command.Parameters.Add("@QuestionTitle", SqlDbType.NVarChar, 250).Value = title;
+            command.Parameters.Add("@QuestionText", SqlDbType.NVarChar, _settings.MaximumQuestionLength).Value = text;
+            command.Parameters.Add("@IsLanguageFlagged", SqlDbType.Bit).Value = languageFlagged;
+            command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = questionId;
+            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+            command.Parameters.Add("@GuestEditTokenHash", SqlDbType.NVarChar, 64).Value = tokenHash;
+            command.Parameters.Add("@EditWindowMinutes", SqlDbType.Int).Value = GuestEditWindowMinutes;
+            connection.Open();
+            return command.ExecuteNonQuery() == 1;
+        }
+    }
+
+    private void RegisterGuestCorrectionCountdownScript(DateTime expiresUtc)
+    {
+        if (Page == null) return;
+        var remainingSeconds = Math.Max(0, (int)Math.Ceiling((expiresUtc - DateTime.UtcNow).TotalSeconds));
+        var countdownId = HttpUtility.JavaScriptStringEncode(GuestCorrectionCountdownId);
+        var buttonId = HttpUtility.JavaScriptStringEncode(btnSaveGuestCorrection.ClientID);
+        var titleId = HttpUtility.JavaScriptStringEncode(txtGuestEditTitle.ClientID);
+        var questionId = HttpUtility.JavaScriptStringEncode(txtGuestEditQuestion.ClientID);
+        var script = @"
+(function () {
+    var remaining = " + remainingSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + @";
+    var output = document.getElementById('" + countdownId + @"');
+    var button = document.getElementById('" + buttonId + @"');
+    var title = document.getElementById('" + titleId + @"');
+    var question = document.getElementById('" + questionId + @"');
+    function render() {
+        if (!output) { return; }
+        if (remaining <= 0) {
+            output.textContent = 'Correction window ended';
+            if (button) { button.disabled = true; button.setAttribute('aria-disabled', 'true'); }
+            if (title) { title.disabled = true; }
+            if (question) { question.disabled = true; }
+            return;
+        }
+        var minutes = Math.floor(remaining / 60);
+        var seconds = remaining % 60;
+        output.textContent = minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
+        remaining -= 1;
+        window.setTimeout(render, 1000);
+    }
+    render();
+})();";
+        RegisterStartupScript("JacarandaQandAGuestCorrectionCountdown_" + ModuleId, script);
+    }
+
+    private void RegisterGuestCorrectionFocusScript()
+    {
+        if (Page == null || pnlGuestCorrection == null) return;
+        var targetId = HttpUtility.JavaScriptStringEncode(pnlGuestCorrection.ClientID);
+        var script = @"
+(function () {
+    var target = document.getElementById('" + targetId + @"');
+    if (!target) { return; }
+    window.setTimeout(function () {
+        try {
+            target.setAttribute('tabindex', '-1');
+            target.scrollIntoView({ behavior: 'auto', block: 'start' });
+            target.focus();
+        } catch (e) { try { target.scrollIntoView(true); } catch (ignore) { } }
+    }, 50);
+})();";
+        RegisterStartupScript("JacarandaQandAGuestCorrectionFocus_" + ModuleId, script);
     }
 
     private string ComputeConversationTokenHash(string token)
@@ -1510,12 +1873,13 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
             <asp:LinkButton ID="btnToggleAskQuestion" runat="server" Text="Ask a Question"
                 CssClass="jqa-ask-button" CausesValidation="false"
                 OnClick="btnToggleAskQuestion_Click" />
+            <p class="jqa-guidance"><strong>Please ask one question at a time.</strong> Jacaranda Q&amp;A is intended as a moderated question-and-answer ministry rather than an open discussion forum. After your question has been answered, the original questioner may ask a related follow-up.</p>
         </asp:Panel>
 
         <asp:Panel ID="pnlAskForm" runat="server" Visible="false" CssClass="jqa-ask-panel"
             role="region" aria-labelledby="jqaAskHeading">
             <h2 id="jqaAskHeading">Ask a Question</h2>
-            <p class="jqa-intro">Questions are moderated so that the conversation can remain gracious, thoughtful and Christ-like.</p>
+            <p class="jqa-intro">Questions are moderated so that the conversation can remain gracious, thoughtful and Christ-like. Please keep each submission to one question rather than opening a general discussion.</p>
 
             <asp:Panel ID="pnlPostingClosed" runat="server" Visible="false" CssClass="jqa-message jqa-message-info">
                 New questions are temporarily closed.
@@ -1562,20 +1926,46 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
     </asp:Panel>
 
 
+    <asp:Panel ID="pnlGuestCorrection" runat="server" Visible="false" CssClass="jqa-guest-correction"
+        role="region" aria-labelledby="jqaGuestCorrectionHeading">
+        <h2 id="jqaGuestCorrectionHeading">Review your question</h2>
+        <p>Your question is awaiting moderation. You have <strong>one opportunity</strong>, available for up to 5 minutes after submission, to correct the <strong>title and question text</strong>. Once you save the correction, the correction window closes. Your public name and private email cannot be changed.</p>
+        <p class="jqa-correction-time"><strong>Time remaining:</strong> <span id="<%= GuestCorrectionCountdownId %>">5:00</span></p>
+        <asp:HiddenField ID="hdnGuestEditQuestionId" runat="server" />
+        <div class="jqa-field">
+            <asp:Label ID="lblGuestEditTitle" runat="server" AssociatedControlID="txtGuestEditTitle" Text="Question title" />
+            <asp:TextBox ID="txtGuestEditTitle" runat="server" CssClass="jqa-input" MaxLength="250" />
+        </div>
+        <div class="jqa-field">
+            <asp:Label ID="lblGuestEditQuestion" runat="server" AssociatedControlID="txtGuestEditQuestion" Text="Your question" />
+            <asp:TextBox ID="txtGuestEditQuestion" runat="server" CssClass="jqa-textarea" TextMode="MultiLine" Rows="7" />
+        </div>
+        <div class="jqa-actions">
+            <asp:Button ID="btnSaveGuestCorrection" runat="server" Text="Save Corrections"
+                CssClass="jqa-submit" OnClick="btnSaveGuestCorrection_Click" />
+        </div>
+    </asp:Panel>
+
     <section class="jqa-conversations" aria-labelledby="jqaQuestionsHeading">
         <h2 id="jqaQuestionsHeading"><asp:Literal ID="litQuestionsHeading" runat="server" Text="Questions &amp; Answers" /></h2>
         <asp:Panel ID="pnlNoQuestions" runat="server" Visible="false" CssClass="jqa-empty">There are no published questions yet.</asp:Panel>
         <asp:Repeater ID="rptQuestions" runat="server" OnItemCommand="rptQuestions_ItemCommand">
             <ItemTemplate>
-                <article class="jqa-question" id='jqa-question-<%# Eval("QuestionId") %>'>
+                <article class='<%# QuestionCss(Container.DataItem) %>' id='jqa-question-<%# Eval("QuestionId") %>'>
                     <header class="jqa-question-header">
-                        <div>
-                            <h3><%# Encode(Eval("QuestionTitle")) %></h3>
-                            <div class="jqa-meta">Asked by <strong><%# Encode(Eval("DisplayName")) %></strong> · <%# FormatDate(Eval("CreatedOnDate")) %></div>
-                        </div>
+                        <h3>
+                            <button type="button" class="jqa-question-title-button"
+                                data-jqa-question-toggle
+                                aria-expanded='<%# QuestionExpandedValue(Container.DataItem) %>'
+                                aria-controls='jqa-question-body-<%# Eval("QuestionId") %>'>
+                                <%# Encode(Eval("QuestionTitle")) %>
+                            </button>
+                        </h3>
                         <span class='<%# StatusCss(Eval("QuestionStatus")) %>'><%# StatusText(Eval("QuestionStatus")) %></span>
                     </header>
-                    <div class="jqa-question-text"><%# Encode(Eval("QuestionText")) %></div>
+                    <div class="jqa-question-body" id='jqa-question-body-<%# Eval("QuestionId") %>'>
+                        <div class="jqa-meta">Asked by <strong><%# Encode(Eval("DisplayName")) %></strong> · <%# FormatDate(Eval("CreatedOnDate")) %></div>
+                        <div class="jqa-question-text"><%# Encode(Eval("QuestionText")) %></div>
 
                     <asp:Repeater ID="rptResponses" runat="server" DataSource='<%# Eval("Responses") %>'>
                         <ItemTemplate>
@@ -1592,6 +1982,7 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
                     <div class="jqa-question-actions">
                         <asp:LinkButton ID="btnAnswer" runat="server" CommandName="Answer" CommandArgument='<%# Eval("QuestionId") %>' Text="Answer" CssClass="jqa-secondary-button" CausesValidation="false" Visible='<%# CanShowAnswerButton(Container.DataItem) %>' />
                         <asp:LinkButton ID="btnFollowUp" runat="server" CommandName="FollowUp" CommandArgument='<%# Eval("QuestionId") %>' Text="Ask a follow-up" CssClass="jqa-secondary-button" CausesValidation="false" Visible='<%# CanShowFollowUpButton(Container.DataItem) %>' />
+                    </div>
                     </div>
                 </article>
             </ItemTemplate>
@@ -1622,4 +2013,60 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
     </asp:Panel>
 
     </section>
+
+<script type="text/javascript">
+(function () {
+    function findArticle(element) {
+        while (element && element !== document) {
+            if (element.classList && element.classList.contains('jqa-question')) return element;
+            element = element.parentNode;
+        }
+        return null;
+    }
+
+    function setExpanded(article, expanded) {
+        if (!article) return;
+        if (expanded) article.classList.add('jqa-question-expanded');
+        else article.classList.remove('jqa-question-expanded');
+        var toggle = article.querySelector('[data-jqa-question-toggle]');
+        if (toggle) toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    }
+
+    function openOnly(article, shouldScroll) {
+        if (!article) return;
+        var root = article.parentNode;
+        while (root && root !== document && !(root.classList && root.classList.contains('jqa-conversations'))) root = root.parentNode;
+        var all = (root || document).querySelectorAll('.jqa-question');
+        for (var i = 0; i < all.length; i++) setExpanded(all[i], all[i] === article);
+        if (shouldScroll) {
+            window.setTimeout(function () {
+                try { article.scrollIntoView({ behavior: 'auto', block: 'start' }); }
+                catch (e) { try { article.scrollIntoView(true); } catch (ignore) { } }
+            }, 25);
+        }
+    }
+
+    document.addEventListener('click', function (event) {
+        var target = event.target;
+        while (target && target !== document && !(target.getAttribute && target.getAttribute('data-jqa-question-toggle') !== null)) target = target.parentNode;
+        if (!target || target === document) return;
+        var article = findArticle(target);
+        if (!article) return;
+        var isOpen = article.classList.contains('jqa-question-expanded');
+        if (isOpen) setExpanded(article, false);
+        else openOnly(article, false);
+    });
+
+    function openHashQuestion() {
+        var hash = window.location.hash || '';
+        if (hash.indexOf('#jqa-question-') !== 0) return;
+        var article = document.getElementById(hash.substring(1));
+        if (article) openOnly(article, false);
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', openHashQuestion);
+    else openHashQuestion();
+    window.addEventListener('hashchange', openHashQuestion);
+})();
+</script>
 </div>

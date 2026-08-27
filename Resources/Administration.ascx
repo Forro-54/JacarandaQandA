@@ -274,7 +274,7 @@ END";
         {
             command.CommandText = @"
 UPDATE " + QuestionsTable + @"
-SET IsApproved = 1, LastModifiedOnDate = GETUTCDATE(), LastModifiedByUserId = @UserId
+SET IsApproved = 1, GuestEditTokenHash = NULL, LastModifiedOnDate = GETUTCDATE(), LastModifiedByUserId = @UserId
 WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 0;";
             AddAdminScope(command, questionId);
             connection.Open(); command.ExecuteNonQuery();
@@ -314,7 +314,7 @@ WHERE ResponseId = @Id AND PortalId = @PortalId AND IsDeleted = 0 AND IsApproved
                     update.Transaction = transaction;
                     update.CommandText = @"
 UPDATE " + ResponsesTable + @"
-SET IsApproved = 1, LastModifiedOnDate = GETUTCDATE(), LastModifiedByUserId = @UserId
+SET IsApproved = 1, GuestEditTokenHash = NULL, LastModifiedOnDate = GETUTCDATE(), LastModifiedByUserId = @UserId
 WHERE ResponseId = @Id AND PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 0;";
                     update.Parameters.Add("@Id", SqlDbType.Int).Value = responseId;
                     update.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;

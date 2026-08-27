@@ -1,10 +1,13 @@
-Jacaranda Q&A 01.00.09
+Jacaranda Q&A 01.00.11
 
-- Fixes Ask a follow-up opening the response editor at the bottom of the complete Q&A page.
-- The follow-up editor is now attached directly to the selected question conversation.
-- Existing answers and follow-ups remain immediately above the editor for context.
-- The browser moves directly to the opened follow-up editor.
-- Administrator answer mode uses the same question-attached response-form placement while retaining focused question navigation.
-- Response validation errors keep the editor attached to and focused on the selected question.
-- Retains the compact Ask a Question launcher, tabbed Administration interface and #F5F5DC eye-relief palette.
-- No database schema changes; safe in-place upgrade from 01.00.08.
+- Changes the guest 5-minute correction facility to a single-use correction opportunity.
+- A guest may make one correction within five minutes; saving it immediately consumes the guest edit credential and ends further correction access.
+- Guest correction now returns to the normal Q&A page with a confirmation that the corrected question is awaiting moderation.
+- Guest correction still permits changes only to the question title and question text; public name and private email remain locked.
+- Published questions are collapsed by default on a normal first visit so the archive initially shows question titles and statuses rather than every full conversation.
+- Selecting a question title expands that conversation; opening another collapses the previously open question.
+- Adds accessible aria-expanded state to the question-title controls.
+- Administrator Answer mode, Ask a follow-up, completion links and direct question/hash links automatically expand the relevant conversation.
+- Retains the Answered + original-questioner rule for Ask a follow-up.
+- Retains the one-question-at-a-time / not-a-discussion-forum participation guidance and #F5F5DC eye-relief palette.
+- No database schema changes; safe in-place upgrade from 01.00.10.
