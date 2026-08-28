@@ -4,7 +4,9 @@ Jacaranda Q&A is an independent DNN 10 WebForms module for moderated theological
 
 ## Version
 
-01.00.16 — Dynamic site-title Administration heading.
+01.00.18 — Moderation acknowledgement delivery fix.
+
+01.00.17 — Questioner moderation acknowledgement email.
 
 ## Physical path
 
@@ -148,3 +150,21 @@ Both DNN modules remain bundled in the same installation ZIP, continue to share 
 ## 01.00.16 dynamic site-title guidance
 
 The public one-question-at-a-time guidance now uses the current DNN portal/site title instead of the hard-coded module name. For example, a portal named **Forrest Ministries Australia** displays **Forrest Ministries Australia Q&A** in the guidance text. The portal title is HTML-encoded before rendering and falls back to **This site** if no title is available. No database schema changes are required.
+
+
+
+## 01.00.18 moderation acknowledgement delivery fix
+
+Questions awaiting moderation now resolve the questioner email from the saved Question record before sending the acknowledgement. Registered questioners are resolved through their current DNN user account and guest questioners through the protected guest email stored with the Question. This uses the same recipient-resolution path as the existing answer notification workflow.
+
+The answer-notification footer also now uses the current DNN portal/site title rather than a hard-coded site name. No database schema changes are required.
+
+## 01.00.17 questioner moderation acknowledgement
+
+When a successfully submitted top-level question requires moderation, Jacaranda Q&A now sends a plain-text acknowledgement to the questioner as well as the existing administrator alert.
+
+Registered questioners receive the acknowledgement at the email address on their current DNN account. Guest questioners receive it at the private email address supplied with the question.
+
+The acknowledgement confirms that the question has been received, is awaiting moderation, should not be submitted again, and that the questioner will receive another email when a ministry answer is published.
+
+The existing **Enable Notifications** portal setting remains the master switch for administrator alerts, submission acknowledgements and answer notifications. No database schema changes are required.

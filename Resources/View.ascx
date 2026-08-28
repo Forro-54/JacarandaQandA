@@ -505,6 +505,15 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
             }
 
             SendAdministratorSubmissionNotification(questionId, title, displayName, text, isGuest, guestEmail, approved, false, languageFlagged);
+            if (!approved)
+            {
+                var savedQuestion = GetQuestion(questionId, false);
+                if (savedQuestion != null)
+                {
+                    SendQuestionerModerationAcknowledgement(savedQuestion);
+                }
+            }
+
             var completionMessage = approved
                 ? "Your question has been added and is awaiting an answer."
                 : (isGuest
@@ -2019,6 +2028,29 @@ WHERE QuestionId = @QuestionId
         }
     }
 
+    private void SendQuestionerModerationAcknowledgement(QuestionRow question)
+    {
+        if (!_settings.EnableNotifications || question == null || question.QuestionId <= 0) return;
+
+        string recipient;
+        if (!TryGetQuestionerEmail(question, out recipient)) return;
+
+        var fromAddress = GetNotificationFromAddress(recipient);
+        if (!IsValidEmailAddress(fromAddress)) return;
+
+        var siteTitle = String.IsNullOrWhiteSpace(QaSiteTitle) ? "This site" : QaSiteTitle.Trim();
+        var subject = CleanEmailHeader("Your question is awaiting moderation — " + question.QuestionTitle);
+        var greetingName = String.IsNullOrWhiteSpace(question.DisplayName) ? "there" : question.DisplayName.Trim();
+
+        var body = "Hello " + greetingName + ",\r\n\r\n"
+            + "Thank you. Your question has been received by " + siteTitle + " Q&A and is awaiting moderation."
+            + "\r\n\r\nQuestion: " + question.QuestionTitle
+            + "\r\n\r\nYou do not need to submit the question again. We will email you when your question has been answered."
+            + "\r\n\r\n" + siteTitle + " Q&A";
+
+        SendPlainTextMail(fromAddress, recipient, subject, body);
+    }
+
     private void SendQuestionerAnswerNotification(QuestionRow question, string answerText)
     {
         if (!_settings.EnableNotifications || question == null) return;
@@ -2044,7 +2076,7 @@ WHERE QuestionId = @QuestionId
             + "\r\n\r\nQuestion: " + question.QuestionTitle
             + "\r\n\r\nAnswer:\r\n" + (answerText ?? String.Empty).Trim()
             + "\r\n\r\nView the conversation:\r\n" + BuildQuestionUrl(question.QuestionId)
-            + "\r\n\r\nForrest Ministries Australia";
+            + "\r\n\r\n" + (String.IsNullOrWhiteSpace(QaSiteTitle) ? "This site" : QaSiteTitle.Trim()) + " Q&A";
 
         SendPlainTextMail(fromAddress, recipient, subject, body);
     }

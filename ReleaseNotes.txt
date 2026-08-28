@@ -1,8 +1,20 @@
-Jacaranda Q&A 01.00.16
+Jacaranda Q&A 01.00.18
 
-- Changes the Administration screen heading from the hard-coded "Jacaranda Q&A Administration" to the current DNN site/portal title.
-- Administration now renders as: "[Site Title] Q&A Administration".
-- Uses DNN PortalSettings.PortalName and HTML-encodes the rendered site title.
-- Falls back to "This site Q&A Administration" if no portal title is available.
-- Retains the dynamic public guidance introduced in 01.00.15.
-- No database schema or workflow changes; safe in-place upgrade from 01.00.15 and suitable for clean installation.
+- Fixes questioner acknowledgement email delivery for questions awaiting moderation.
+- Reloads the saved Question record after insertion and resolves the recipient through the same stored-recipient path used by the working answer notifications.
+- Registered questioner email is resolved from the current DNN user account.
+- Guest questioner email is decrypted from the protected email stored with the Question record.
+- Keeps all Q&A email in plain-text format.
+- Updates the answer-notification footer to use the current DNN portal/site title instead of a hard-coded site name.
+- No database schema changes.
+
+Jacaranda Q&A 01.00.17
+
+- Adds a plain-text acknowledgement email to the questioner when a successfully submitted question is awaiting moderation.
+- Sends the acknowledgement to the current DNN account email for registered users.
+- Sends the acknowledgement to the private submitted email address for guest questioners.
+- The acknowledgement confirms that the question was received, is awaiting moderation, should not be resubmitted, and that another email will be sent when it is answered.
+- The existing administrator notification continues to be sent for new questions and follow-ups.
+- Existing answer and follow-up-answer notification behaviour is unchanged.
+- The existing Enable Notifications setting remains the master switch for all Q&A email notifications.
+- No database schema changes; safe in-place upgrade from 01.00.16 and suitable for clean installation.
