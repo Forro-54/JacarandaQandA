@@ -10,6 +10,7 @@
 <%@ Import Namespace="System.Web.Security" %>
 <%@ Import Namespace="DotNetNuke.Common.Utilities" %>
 <%@ Import Namespace="DotNetNuke.Data" %>
+<%@ Import Namespace="DotNetNuke.Entities.Users" %>
 <%@ Import Namespace="DotNetNuke.Services.Exceptions" %>
 <%@ Import Namespace="DotNetNuke.Services.Mail" %>
 
@@ -56,6 +57,14 @@
     private string PostMessageSessionKey { get { return PostMessagePrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
     private string PostSuccessSessionKey { get { return PostSuccessPrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
     protected string PostRedirectMessageAnchorId { get { return PostRedirectMessageAnchorPrefix + ModuleId; } }
+    protected string QaSiteTitle
+    {
+        get
+        {
+            var title = PortalSettings == null ? String.Empty : (PortalSettings.PortalName ?? String.Empty).Trim();
+            return String.IsNullOrWhiteSpace(title) ? "This site" : title;
+        }
+    }
 
     protected void Page_Load(object sender, EventArgs e)
     {
@@ -495,7 +504,7 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
                 SetGuestEditSession(questionId, guestEditToken);
             }
 
-            SendNotificationEmail(questionId, title, displayName, text, isGuest, guestEmail, approved, false, languageFlagged);
+            SendAdministratorSubmissionNotification(questionId, title, displayName, text, isGuest, guestEmail, approved, false, languageFlagged);
             var completionMessage = approved
                 ? "Your question has been added and is awaiting an answer."
                 : (isGuest
@@ -631,7 +640,15 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
                 return;
             }
 
-            SendNotificationEmail(question.QuestionId, question.QuestionTitle, displayName, text, isGuest, String.Empty, approved, true, languageFlagged);
+            if (ministryAnswer)
+            {
+                SendQuestionerAnswerNotification(question, text);
+            }
+            else
+            {
+                SendAdministratorSubmissionNotification(question.QuestionId, question.QuestionTitle, displayName, text, isGuest, String.Empty, approved, true, languageFlagged);
+            }
+
             var completionMessage = approved
                 ? (ministryAnswer ? "The answer has been published." : "Your follow-up has been added and the question is awaiting another answer.")
                 : "Thank you. Your follow-up has been received and is awaiting moderation.";
@@ -1139,7 +1156,7 @@ ORDER BY CreatedOnDate ASC, ResponseId ASC;";
         using (var command = connection.CreateCommand())
         {
             command.CommandText = @"
-SELECT TOP 1 QuestionId, UserId, DisplayName, GuestConversationTokenHash, QuestionTitle, QuestionText, QuestionStatus,
+SELECT TOP 1 QuestionId, UserId, DisplayName, GuestEmailEncrypted, GuestConversationTokenHash, QuestionTitle, QuestionText, QuestionStatus,
        IsLanguageFlagged, CreatedOnDate
 FROM " + QuestionsTable + @"
 WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND ModuleId = @ModuleId
@@ -1156,6 +1173,7 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
                     QuestionId = Convert.ToInt32(reader["QuestionId"]),
                     UserId = reader["UserId"] == DBNull.Value ? (int?)null : Convert.ToInt32(reader["UserId"]),
                     DisplayName = Convert.ToString(reader["DisplayName"]),
+                    GuestEmailEncrypted = reader["GuestEmailEncrypted"] == DBNull.Value ? String.Empty : Convert.ToString(reader["GuestEmailEncrypted"]),
                     GuestConversationTokenHash = reader["GuestConversationTokenHash"] == DBNull.Value ? String.Empty : Convert.ToString(reader["GuestConversationTokenHash"]),
                     QuestionTitle = Convert.ToString(reader["QuestionTitle"]),
                     QuestionText = Convert.ToString(reader["QuestionText"]),
@@ -1915,6 +1933,23 @@ WHERE QuestionId = @QuestionId
         catch (Exception ex) { Exceptions.LogException(ex); return false; }
     }
 
+    private bool TryUnprotectGuestEmail(string protectedEmail, out string email)
+    {
+        email = String.Empty;
+        if (String.IsNullOrWhiteSpace(protectedEmail) || protectedEmail.Length > 2048) return false;
+        try
+        {
+            var protectedBytes = Convert.FromBase64String(protectedEmail);
+            var clearBytes = MachineKey.Unprotect(protectedBytes, "JacarandaQA", "GuestEmail", PortalId.ToString(), ModuleId.ToString());
+            if (clearBytes == null || clearBytes.Length == 0) return false;
+            var candidate = Encoding.UTF8.GetString(clearBytes).Trim();
+            if (!IsValidEmailAddress(candidate)) return false;
+            email = candidate;
+            return true;
+        }
+        catch (Exception ex) { Exceptions.LogException(ex); return false; }
+    }
+
     private string GetOrCreateGuestBrowserToken()
     {
         var token = String.Empty;
@@ -1957,36 +1992,145 @@ WHERE QuestionId = @QuestionId
         return output.ToString();
     }
 
-    private void SendNotificationEmail(int questionId, string title, string displayName, string text, bool isGuest, string guestEmail, bool approved, bool isResponse, bool languageFlagged)
+    private void SendAdministratorSubmissionNotification(int questionId, string title, string displayName, string text, bool isGuest, string guestEmail, bool approved, bool isResponse, bool languageFlagged)
     {
         if (!_settings.EnableNotifications) return;
         var recipients = GetNotificationRecipients();
         if (recipients.Count == 0) return;
-        var fromAddress = PortalSettings == null ? String.Empty : (PortalSettings.Email ?? String.Empty).Trim();
-        if (!IsValidEmailAddress(fromAddress)) fromAddress = recipients[0];
+        var fromAddress = GetNotificationFromAddress(recipients.Count > 0 ? recipients[0] : String.Empty);
         if (!IsValidEmailAddress(fromAddress)) return;
 
-        var action = isResponse ? "Follow-up / response" : (approved ? "New theological question" : "Question awaiting approval");
+        var action = isResponse
+            ? (approved ? "New follow-up question" : "Follow-up question awaiting approval")
+            : (approved ? "New theological question" : "Question awaiting approval");
         var subject = CleanEmailHeader(action + " — " + title);
         var body = "Jacaranda Q&A\r\n\r\nQuestion ID: " + questionId
             + "\r\nPage: " + GetPageTitle()
             + "\r\nAuthor: " + displayName
-            + "\r\nSubmission: " + (isResponse ? "Response" : "Question")
+            + "\r\nSubmission: " + (isResponse ? "Follow-up question" : "Question")
             + "\r\nModeration: " + (approved ? "Approved" : "Awaiting approval")
             + "\r\nLanguage filter: " + (languageFlagged ? "Matched" : "No match")
             + (isGuest && !String.IsNullOrWhiteSpace(guestEmail) ? "\r\nGuest email (private): " + guestEmail : String.Empty)
-            + "\r\nPage URL: " + DotNetNuke.Common.Globals.NavigateURL(TabId)
+            + "\r\nPage URL: " + BuildQuestionUrl(questionId)
             + (_settings.IncludeSubmissionTextInNotifications ? "\r\n\r\n" + text : String.Empty);
         foreach (var recipient in recipients)
         {
+            SendPlainTextMail(fromAddress, recipient, subject, body);
+        }
+    }
+
+    private void SendQuestionerAnswerNotification(QuestionRow question, string answerText)
+    {
+        if (!_settings.EnableNotifications || question == null) return;
+
+        string recipient;
+        if (!TryGetQuestionerEmail(question, out recipient)) return;
+
+        var fromAddress = GetNotificationFromAddress(recipient);
+        if (!IsValidEmailAddress(fromAddress)) return;
+
+        var ministryAnswerCount = CountApprovedMinistryAnswers(question.QuestionId);
+        var isFollowUpAnswer = ministryAnswerCount > 1;
+        var subjectPrefix = isFollowUpAnswer
+            ? "Your Jacaranda Q&A follow-up has been answered"
+            : "Your Jacaranda Q&A question has been answered";
+        var subject = CleanEmailHeader(subjectPrefix + " — " + question.QuestionTitle);
+
+        var greetingName = String.IsNullOrWhiteSpace(question.DisplayName) ? "there" : question.DisplayName.Trim();
+        var body = "Hello " + greetingName + ",\r\n\r\n"
+            + (isFollowUpAnswer
+                ? "A follow-up in your Jacaranda Q&A conversation has been answered."
+                : "Your Jacaranda Q&A question has been answered.")
+            + "\r\n\r\nQuestion: " + question.QuestionTitle
+            + "\r\n\r\nAnswer:\r\n" + (answerText ?? String.Empty).Trim()
+            + "\r\n\r\nView the conversation:\r\n" + BuildQuestionUrl(question.QuestionId)
+            + "\r\n\r\nForrest Ministries Australia";
+
+        SendPlainTextMail(fromAddress, recipient, subject, body);
+    }
+
+    private bool TryGetQuestionerEmail(QuestionRow question, out string email)
+    {
+        email = String.Empty;
+        if (question == null) return false;
+
+        if (question.UserId.HasValue && question.UserId.Value > 0)
+        {
             try
             {
-                // Force plain text so visitor-supplied content can never cause DNN's
-                // automatic HTML detection to turn a moderator notification into HTML.
-                Mail.SendMail(fromAddress, recipient, String.Empty, subject, body, String.Empty, "text", String.Empty, String.Empty, String.Empty, String.Empty);
+                var user = UserController.GetUserById(PortalId, question.UserId.Value);
+                if (user == null || !IsValidEmailAddress(user.Email)) return false;
+                email = user.Email.Trim();
+                return true;
             }
-            catch (Exception ex) { Exceptions.LogException(ex); }
+            catch (Exception ex)
+            {
+                Exceptions.LogException(ex);
+                return false;
+            }
         }
+
+        return TryUnprotectGuestEmail(question.GuestEmailEncrypted, out email);
+    }
+
+    private int CountApprovedMinistryAnswers(int questionId)
+    {
+        if (questionId <= 0) return 0;
+        using (var connection = new SqlConnection(ConnectionString))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+SELECT COUNT(1)
+FROM " + ResponsesTable + @"
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
+  AND ResponseType = 1
+  AND IsApproved = 1
+  AND IsDeleted = 0;";
+            command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = questionId;
+            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+            connection.Open();
+            return Convert.ToInt32(command.ExecuteScalar());
+        }
+    }
+
+    private string BuildQuestionUrl(int questionId)
+    {
+        try
+        {
+            return DotNetNuke.Common.Globals.NavigateURL(
+                TabId,
+                String.Empty,
+                AnswerModuleQueryKey + "=" + ModuleId,
+                AnswerQuestionQueryKey + "=" + questionId)
+                + "#jqa-question-" + questionId;
+        }
+        catch
+        {
+            return DotNetNuke.Common.Globals.NavigateURL(TabId) + "#jqa-question-" + questionId;
+        }
+    }
+
+    private string GetNotificationFromAddress(string fallback)
+    {
+        var fromAddress = PortalSettings == null ? String.Empty : (PortalSettings.Email ?? String.Empty).Trim();
+        if (!IsValidEmailAddress(fromAddress)) fromAddress = (fallback ?? String.Empty).Trim();
+        return IsValidEmailAddress(fromAddress) ? fromAddress : String.Empty;
+    }
+
+    private void SendPlainTextMail(string fromAddress, string recipient, string subject, string body)
+    {
+        if (!IsValidEmailAddress(fromAddress) || !IsValidEmailAddress(recipient)) return;
+        try
+        {
+            Mail.SendMail(fromAddress, recipient, String.Empty, CleanEmailHeader(subject), body ?? String.Empty,
+                String.Empty, "text", String.Empty, String.Empty, String.Empty, String.Empty);
+        }
+        catch (Exception ex) { Exceptions.LogException(ex); }
     }
 
     private List<string> GetNotificationRecipients()
@@ -2152,6 +2296,7 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
         public int QuestionId { get; set; }
         public int? UserId { get; set; }
         public string DisplayName { get; set; }
+        public string GuestEmailEncrypted { get; set; }
         public string GuestConversationTokenHash { get; set; }
         public string QuestionTitle { get; set; }
         public string QuestionText { get; set; }
@@ -2196,7 +2341,7 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
             <asp:LinkButton ID="btnToggleAskQuestion" runat="server" Text="Ask a Question"
                 CssClass="jqa-ask-button" CausesValidation="false"
                 OnClick="btnToggleAskQuestion_Click" />
-            <p class="jqa-guidance"><strong>Please ask one question at a time.</strong> Jacaranda Q&amp;A is intended as a moderated question-and-answer ministry rather than an open discussion forum. After your question has been answered, the original questioner may ask a related follow-up.</p>
+            <p class="jqa-guidance"><strong>Please ask one question at a time.</strong> <%= HttpUtility.HtmlEncode(QaSiteTitle) %> Q&amp;A is intended as a moderated question-and-answer ministry rather than an open discussion forum. After your question has been answered, the original questioner may ask a related follow-up.</p>
         </asp:Panel>
 
         <asp:Panel ID="pnlAskForm" runat="server" Visible="false" CssClass="jqa-ask-panel"

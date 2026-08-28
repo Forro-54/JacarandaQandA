@@ -4,7 +4,7 @@ Jacaranda Q&A is an independent DNN 10 WebForms module for moderated theological
 
 ## Version
 
-01.00.12 — Security and workflow hardening.
+01.00.16 — Dynamic site-title Administration heading.
 
 ## Physical path
 
@@ -119,3 +119,32 @@ Only one pending questioner follow-up is permitted per question. The follow-up b
 Ministry **Answer** is now restricted to questions whose status is **Awaiting Answer**. The public button, direct Administration answer context and final response insert all enforce that state. Publishing an approved ministry answer or approved follow-up updates the question status inside the same transaction as the response insert.
 
 No database schema changes are required; safe in-place upgrade from 01.00.11.
+
+
+## 01.00.13 email notification workflow
+
+Email notifications are now split by audience and event.
+
+- Administrators receive notification when a visitor submits a new question.
+- Administrators receive notification when the original questioner submits a follow-up.
+- Ministry answers do not generate an administrator notification.
+- The original questioner receives an email whenever a ministry answer is published, including answers to later follow-ups.
+- Registered-user notification addresses are resolved from the current DNN user account.
+- Guest notification addresses are decrypted from the protected question record only when the answer notice is sent.
+- Answer notices contain the answer text and a direct link back to the specific expanded Q&A conversation.
+- All Q&A emails are forced to plain-text format.
+- The existing **Enable email notifications** portal setting remains the master switch for both administrator and questioner notifications.
+
+No database schema changes are required.
+
+
+## 01.00.16 clean-install packaging fix
+
+The separately placeable **Jacaranda Q&A Administration** package no longer declares `Jacaranda_QandA` as a DNN package dependency inside the same installation manifest. DNN validates package dependencies before sibling packages in the same ZIP are installed, so the dependency caused clean installations to stop with **A dependent package is not installed - Jacaranda_QandA** even though the public module appeared first in the manifest.
+
+Both DNN modules remain bundled in the same installation ZIP, continue to share `DesktopModules/JacarandaQandA`, and use the same Q&A database. Existing server-side Administrator/Superuser checks remain unchanged. No database schema or runtime workflow changes are required.
+
+
+## 01.00.16 dynamic site-title guidance
+
+The public one-question-at-a-time guidance now uses the current DNN portal/site title instead of the hard-coded module name. For example, a portal named **Forrest Ministries Australia** displays **Forrest Ministries Australia Q&A** in the guidance text. The portal title is HTML-encoded before rendering and falls back to **This site** if no title is available. No database schema changes are required.

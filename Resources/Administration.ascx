@@ -32,6 +32,15 @@
     private string ConnectionString { get { return Config.GetConnectionString(); } }
     private string SecurityTokenSessionKey { get { return SecurityTokenPrefix + PortalId + "_" + UserId; } }
 
+    private string QaSiteTitle
+    {
+        get
+        {
+            var title = PortalSettings == null ? String.Empty : (PortalSettings.PortalName ?? String.Empty).Trim();
+            return String.IsNullOrWhiteSpace(title) ? "This site" : title;
+        }
+    }
+
     private string ActiveTab
     {
         get
@@ -872,7 +881,7 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
     </asp:Panel>
 
     <asp:Panel ID="pnlAdministration" runat="server" Visible="false">
-        <h2>Jacaranda Q&amp;A Administration</h2>
+        <h2><%= HttpUtility.HtmlEncode(QaSiteTitle) %> Q&amp;A Administration</h2>
         <p class="jqa-intro">Moderate theological questions and follow-ups, identify conversations awaiting an answer, and manage the portal-wide Q&amp;A configuration.</p>
 
         <asp:Panel ID="pnlMessage" runat="server" Visible="false" CssClass="jqa-message" role="status" aria-live="polite">
@@ -1040,9 +1049,9 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
 
                 <fieldset>
                     <legend>Email notifications</legend>
-                    <div class="jqa-checkbox"><asp:CheckBox ID="chkEnableNotifications" runat="server" Text="Email moderators when a new question or response is submitted" /></div>
-                    <div class="jqa-field"><asp:Label ID="lblNotificationEmailAddresses" runat="server" AssociatedControlID="txtNotificationEmailAddresses" Text="Notification email address(es)" /><asp:TextBox ID="txtNotificationEmailAddresses" runat="server" TextMode="MultiLine" Rows="3" CssClass="jqa-textarea" MaxLength="2000" /></div>
-                    <div class="jqa-checkbox"><asp:CheckBox ID="chkIncludeSubmissionText" runat="server" Text="Include submitted text in notification emails" /></div>
+                    <div class="jqa-checkbox"><asp:CheckBox ID="chkEnableNotifications" runat="server" Text="Enable Q&amp;A email notifications: alert administrators to new questions/follow-ups and notify questioners when answers are posted" /></div>
+                    <div class="jqa-field"><asp:Label ID="lblNotificationEmailAddresses" runat="server" AssociatedControlID="txtNotificationEmailAddresses" Text="Administrator notification email address(es)" /><asp:TextBox ID="txtNotificationEmailAddresses" runat="server" TextMode="MultiLine" Rows="3" CssClass="jqa-textarea" MaxLength="2000" /></div>
+                    <div class="jqa-checkbox"><asp:CheckBox ID="chkIncludeSubmissionText" runat="server" Text="Include visitor-submitted text in administrator notification emails" /></div>
                 </fieldset>
 
                 <div class="jqa-audit-note"><asp:Literal ID="litAudit" runat="server" /></div>

@@ -1,13 +1,8 @@
-Jacaranda Q&A 01.00.12
+Jacaranda Q&A 01.00.16
 
-- Forces moderator notification emails to plain-text format.
-- Replaces User-Agent-based guest rate identity with a persistent random browser identity and portal-scoped SHA-256 rate key.
-- Server-enforces one active question at a time for registered users and recognised guests.
-- Blocks new top-level questions while an earlier question is awaiting moderation/answer or while a follow-up is pending moderation.
-- Allows a new top-level question after the earlier question is Answered and has no pending follow-up.
-- Blocks multiple pending questioner follow-ups and hides Ask a follow-up while one is awaiting moderation.
-- Restricts ministry Answer to questions in Awaiting Answer state.
-- Uses serializable transactions and row/range locking for final question/response state checks to reduce rapid double-submit/race conditions.
-- Updates approved response status changes in the same transaction as the response insert.
-- Retains guest conversation-cookie compatibility for pre-01.00.12 active questions.
-- No database schema changes; safe in-place upgrade from 01.00.11.
+- Changes the Administration screen heading from the hard-coded "Jacaranda Q&A Administration" to the current DNN site/portal title.
+- Administration now renders as: "[Site Title] Q&A Administration".
+- Uses DNN PortalSettings.PortalName and HTML-encodes the rendered site title.
+- Falls back to "This site Q&A Administration" if no portal title is available.
+- Retains the dynamic public guidance introduced in 01.00.15.
+- No database schema or workflow changes; safe in-place upgrade from 01.00.15 and suitable for clean installation.
