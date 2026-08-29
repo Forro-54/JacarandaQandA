@@ -1,0 +1,29 @@
+-- Jacaranda Q&A 01.00.19
+-- Adds a portal-wide configurable maximum for questioner follow-up questions.
+-- Existing portals default to four follow-ups per question.
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'{databaseOwner}[{objectQualifier}JacarandaQAPortalSettings]')
+      AND name = N'MaximumFollowUpQuestions'
+)
+BEGIN
+    ALTER TABLE {databaseOwner}[{objectQualifier}JacarandaQAPortalSettings]
+    ADD [MaximumFollowUpQuestions] INT NOT NULL
+        CONSTRAINT [DF_{objectQualifier}JQAPS_MaxFollowUps] DEFAULT ((4));
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.check_constraints
+    WHERE parent_object_id = OBJECT_ID(N'{databaseOwner}[{objectQualifier}JacarandaQAPortalSettings]')
+      AND name = N'CK_{objectQualifier}JQAPS_MaxFollowUps'
+)
+BEGIN
+    ALTER TABLE {databaseOwner}[{objectQualifier}JacarandaQAPortalSettings]
+    ADD CONSTRAINT [CK_{objectQualifier}JQAPS_MaxFollowUps]
+        CHECK ([MaximumFollowUpQuestions] BETWEEN 0 AND 20);
+END
+GO
