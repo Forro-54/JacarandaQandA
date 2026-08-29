@@ -18,6 +18,8 @@
     private const string AnswerQuestionQueryKey = "jqaqid";
     private const string AnswerModuleQueryKey = "jqamid";
     private const string AnswerActionQueryKey = "jqaaction";
+    private const string AdministrationTabQueryKey = "jqatab";
+    private const string AdministrationStatusQueryKey = "jqaadminstatus";
     private const int AdminPageSize = 20;
     private const string TabDashboard = "dashboard";
     private const string TabPending = "pending";
@@ -28,6 +30,7 @@
 
     private string QuestionsTable { get { return GetDnnTableName("JacarandaQAQuestions"); } }
     private string ResponsesTable { get { return GetDnnTableName("JacarandaQAResponses"); } }
+    private string AnswerDraftsTable { get { return GetDnnTableName("JacarandaQAAnswerDrafts"); } }
     private string PortalSettingsTable { get { return GetDnnTableName("JacarandaQAPortalSettings"); } }
     private string ConnectionString { get { return Config.GetConnectionString(); } }
     private string SecurityTokenSessionKey { get { return SecurityTokenPrefix + PortalId + "_" + UserId; } }
@@ -79,8 +82,13 @@
             if (!Page.IsPostBack)
             {
                 EnsureSecurityToken();
-                ActiveTab = TabDashboard;
+                ActiveTab = NormalizeTab(Request.QueryString[AdministrationTabQueryKey]);
                 RefreshAdministration();
+
+                if (String.Equals(Request.QueryString[AdministrationStatusQueryKey], "draftsaved", StringComparison.OrdinalIgnoreCase))
+                {
+                    ShowMessage("Draft saved. It remains private and no email has been sent to the questioner.", true);
+                }
             }
         }
         catch (Exception ex)
@@ -111,6 +119,7 @@
             var blockedTerms = NormalizeBlockedTerms(txtBlockedLanguageTerms.Text);
             var maximumQuestionLength = ParseInt(txtMaximumQuestionLength.Text, 4000, 250, 10000);
             var maximumResponseLength = ParseInt(txtMaximumResponseLength.Text, 4000, 250, 10000);
+            var maximumFollowUpQuestions = ParseInt(txtMaximumFollowUpQuestions.Text, 4, 0, 20);
             var rateSeconds = ParseInt(txtRateLimitSeconds.Text, 60, 0, 3600);
             var rateMaxPosts = ParseInt(txtRateLimitMaxPosts.Text, 5, 1, 100);
             var rateWindow = ParseInt(txtRateLimitWindowMinutes.Text, 15, 1, 1440);
@@ -130,6 +139,7 @@ BEGIN
            BlockedLanguageTerms = @BlockedLanguageTerms,
            MaximumQuestionLength = @MaximumQuestionLength,
            MaximumResponseLength = @MaximumResponseLength,
+           MaximumFollowUpQuestions = @MaximumFollowUpQuestions,
            EnableRateLimiting = @EnableRateLimiting,
            RateLimitSeconds = @RateLimitSeconds,
            RateLimitMaxPosts = @RateLimitMaxPosts,
@@ -146,12 +156,12 @@ ELSE
 BEGIN
     INSERT INTO " + PortalSettingsTable + @"
     (PortalId, PostingEnabled, GuestPostingEnabled, RequireRegisteredModeration, EnableLanguageFilter,
-     BlockedLanguageTerms, MaximumQuestionLength, MaximumResponseLength, EnableRateLimiting, RateLimitSeconds,
+     BlockedLanguageTerms, MaximumQuestionLength, MaximumResponseLength, MaximumFollowUpQuestions, EnableRateLimiting, RateLimitSeconds,
      RateLimitMaxPosts, RateLimitWindowMinutes, EnableCaptcha, EnableNotifications, NotificationEmailAddresses,
      IncludeSubmissionTextInNotifications, ModifiedOnDate, ModifiedByUserId)
     VALUES
     (@PortalId, @PostingEnabled, @GuestPostingEnabled, @RequireRegisteredModeration, @EnableLanguageFilter,
-     @BlockedLanguageTerms, @MaximumQuestionLength, @MaximumResponseLength, @EnableRateLimiting, @RateLimitSeconds,
+     @BlockedLanguageTerms, @MaximumQuestionLength, @MaximumResponseLength, @MaximumFollowUpQuestions, @EnableRateLimiting, @RateLimitSeconds,
      @RateLimitMaxPosts, @RateLimitWindowMinutes, @EnableCaptcha, @EnableNotifications, @NotificationEmailAddresses,
      @IncludeSubmissionText, GETUTCDATE(), @UserId);
 END";
@@ -163,6 +173,7 @@ END";
                 command.Parameters.Add("@BlockedLanguageTerms", SqlDbType.NVarChar, -1).Value = String.IsNullOrWhiteSpace(blockedTerms) ? (object)DBNull.Value : blockedTerms;
                 command.Parameters.Add("@MaximumQuestionLength", SqlDbType.Int).Value = maximumQuestionLength;
                 command.Parameters.Add("@MaximumResponseLength", SqlDbType.Int).Value = maximumResponseLength;
+                command.Parameters.Add("@MaximumFollowUpQuestions", SqlDbType.Int).Value = maximumFollowUpQuestions;
                 command.Parameters.Add("@EnableRateLimiting", SqlDbType.Bit).Value = chkEnableRateLimiting.Checked;
                 command.Parameters.Add("@RateLimitSeconds", SqlDbType.Int).Value = rateSeconds;
                 command.Parameters.Add("@RateLimitMaxPosts", SqlDbType.Int).Value = rateMaxPosts;
@@ -365,7 +376,8 @@ SET IsDeleted = 1, LastModifiedOnDate = GETUTCDATE(), LastModifiedByUserId = @Us
 WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0;
 UPDATE " + ResponsesTable + @"
 SET IsDeleted = 1, LastModifiedOnDate = GETUTCDATE(), LastModifiedByUserId = @UserId
-WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0;";
+WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0;
+DELETE FROM " + AnswerDraftsTable + @" WHERE QuestionId=@Id AND PortalId=@PortalId;";
                     command.Parameters.Add("@Id", SqlDbType.Int).Value = questionId;
                     command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
                     command.Parameters.Add("@UserId", SqlDbType.Int).Value = UserInfo.UserID;
@@ -416,6 +428,15 @@ WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0;";
                     responses.ExecuteNonQuery();
                 }
 
+                using (var draft = connection.CreateCommand())
+                {
+                    draft.Transaction = transaction;
+                    draft.CommandText = "DELETE FROM " + AnswerDraftsTable + " WHERE QuestionId=@Id AND PortalId=@PortalId;";
+                    draft.Parameters.Add("@Id", SqlDbType.Int).Value = questionId;
+                    draft.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                    draft.ExecuteNonQuery();
+                }
+
                 transaction.Commit();
                 return true;
             }
@@ -444,7 +465,8 @@ WHERE ResponseId = @Id AND PortalId = @PortalId AND IsDeleted = 0;";
             command.CommandText = @"
 UPDATE " + QuestionsTable + @"
 SET QuestionStatus = @Status, LastModifiedOnDate = GETUTCDATE(), LastModifiedByUserId = @UserId
-WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 1;";
+WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 1;
+IF @Status <> 0 DELETE FROM " + AnswerDraftsTable + @" WHERE QuestionId=@Id AND PortalId=@PortalId;";
             command.Parameters.Add("@Status", SqlDbType.TinyInt).Value = status;
             AddAdminScope(command, questionId);
             connection.Open(); command.ExecuteNonQuery();
@@ -467,6 +489,7 @@ WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0 AND IsApproved
         txtBlockedLanguageTerms.Text = String.Empty;
         txtMaximumQuestionLength.Text = "4000";
         txtMaximumResponseLength.Text = "4000";
+        txtMaximumFollowUpQuestions.Text = "4";
         chkEnableRateLimiting.Checked = true;
         txtRateLimitSeconds.Text = "60";
         txtRateLimitMaxPosts.Text = "5";
@@ -493,6 +516,7 @@ WHERE QuestionId = @Id AND PortalId = @PortalId AND IsDeleted = 0 AND IsApproved
                 txtBlockedLanguageTerms.Text = ReadString(reader, "BlockedLanguageTerms", String.Empty);
                 txtMaximumQuestionLength.Text = ReadInt(reader, "MaximumQuestionLength", 4000).ToString();
                 txtMaximumResponseLength.Text = ReadInt(reader, "MaximumResponseLength", 4000).ToString();
+                txtMaximumFollowUpQuestions.Text = ReadInt(reader, "MaximumFollowUpQuestions", 4).ToString();
                 chkEnableRateLimiting.Checked = ReadBool(reader, "EnableRateLimiting", true);
                 txtRateLimitSeconds.Text = ReadInt(reader, "RateLimitSeconds", 60).ToString();
                 txtRateLimitMaxPosts.Text = ReadInt(reader, "RateLimitMaxPosts", 5).ToString();
@@ -704,10 +728,12 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
         using (var command = connection.CreateCommand())
         {
             command.CommandText = @"
-SELECT QuestionId, TabId, ModuleId, QuestionTitle, DisplayName, CreatedOnDate
-FROM " + QuestionsTable + @"
-WHERE PortalId = @PortalId AND IsDeleted = 0 AND IsApproved = 1 AND QuestionStatus = @Status
-ORDER BY CreatedOnDate DESC, QuestionId DESC
+SELECT Q.QuestionId, Q.TabId, Q.ModuleId, Q.QuestionTitle, Q.DisplayName, Q.CreatedOnDate, D.ModifiedOnDate AS DraftModifiedOnDate
+FROM " + QuestionsTable + @" Q
+LEFT JOIN " + AnswerDraftsTable + @" D
+  ON D.QuestionId=Q.QuestionId AND D.PortalId=Q.PortalId AND D.TabId=Q.TabId AND D.ModuleId=Q.ModuleId
+WHERE Q.PortalId = @PortalId AND Q.IsDeleted = 0 AND Q.IsApproved = 1 AND Q.QuestionStatus = @Status
+ORDER BY Q.CreatedOnDate DESC, Q.QuestionId DESC
 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
             command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
             command.Parameters.Add("@Status", SqlDbType.TinyInt).Value = status;
@@ -724,6 +750,8 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
                         Title = Convert.ToString(reader["QuestionTitle"]),
                         DisplayName = Convert.ToString(reader["DisplayName"]),
                         CreatedOnDate = Convert.ToDateTime(reader["CreatedOnDate"]),
+                        HasDraft = reader["DraftModifiedOnDate"] != DBNull.Value,
+                        DraftModifiedOnDate = reader["DraftModifiedOnDate"] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(reader["DraftModifiedOnDate"]),
                         PageUrl = BuildPageUrl(Convert.ToInt32(reader["TabId"]), Convert.ToInt32(reader["ModuleId"]), id, status == 0)
                     });
                 }
@@ -775,6 +803,7 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
 
     protected string Encode(object value) { return HttpUtility.HtmlEncode(Convert.ToString(value)); }
     protected string FormatDate(object value) { return Convert.ToDateTime(value).ToLocalTime().ToString("d MMM yyyy, h:mm tt"); }
+    protected string FormatOptionalDate(object value) { return value == null || value == DBNull.Value ? String.Empty : Convert.ToDateTime(value).ToLocalTime().ToString("d MMM yyyy, h:mm tt"); }
     protected bool ShowLanguageFlag(object value) { try { return Convert.ToBoolean(value); } catch { return false; } }
 
     private void EnsureSecurityToken() { EnsureSecurityToken(false); }
@@ -871,6 +900,8 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
         public string Title { get; set; }
         public string DisplayName { get; set; }
         public DateTime CreatedOnDate { get; set; }
+        public bool HasDraft { get; set; }
+        public DateTime? DraftModifiedOnDate { get; set; }
         public string PageUrl { get; set; }
     }
 </script>
@@ -948,9 +979,9 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
                 <asp:Repeater ID="rptAwaiting" runat="server" OnItemCommand="rptQuestions_ItemCommand">
                     <ItemTemplate>
                         <div class="jqa-admin-question-row">
-                            <div><strong><%# Encode(Eval("Title")) %></strong><br /><span class="jqa-meta"><%# Encode(Eval("DisplayName")) %> · <%# FormatDate(Eval("CreatedOnDate")) %></span></div>
+                            <div><strong><%# Encode(Eval("Title")) %></strong><br /><span class="jqa-meta"><%# Encode(Eval("DisplayName")) %> · <%# FormatDate(Eval("CreatedOnDate")) %></span><asp:Panel ID="pnlDraftSaved" runat="server" Visible='<%# Convert.ToBoolean(Eval("HasDraft")) %>' CssClass="jqa-draft-badge">Draft saved · <%# FormatOptionalDate(Eval("DraftModifiedOnDate")) %></asp:Panel></div>
                             <div class="jqa-actions">
-                                <asp:HyperLink ID="lnkView" runat="server" NavigateUrl='<%# Eval("PageUrl") %>' Text="View / Answer" CssClass="jqa-submit" />
+                                <asp:HyperLink ID="lnkView" runat="server" NavigateUrl='<%# Eval("PageUrl") %>' Text='<%# Convert.ToBoolean(Eval("HasDraft")) ? "Resume Draft" : "View / Answer" %>' CssClass="jqa-submit" />
                                 <asp:LinkButton ID="btnClose" runat="server" CommandName="Close" CommandArgument='<%# Eval("QuestionId") %>' Text="Close" CssClass="jqa-secondary-button" CausesValidation="false" />
                             </div>
                         </div>
@@ -1021,6 +1052,11 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
                     <div class="jqa-checkbox"><asp:CheckBox ID="chkGuestPostingEnabled" runat="server" Text="Allow guests to ask questions" /></div>
                     <div class="jqa-checkbox"><asp:CheckBox ID="chkRequireRegisteredModeration" runat="server" Text="Hold registered-questioner questions and follow-ups for moderation" /></div>
                     <p class="jqa-help">Guest questions and guest follow-ups are always moderated. Ministry answers are always approved immediately.</p>
+                    <div class="jqa-field">
+                        <asp:Label ID="lblMaximumFollowUpQuestions" runat="server" AssociatedControlID="txtMaximumFollowUpQuestions" Text="Maximum follow-up questions per question" />
+                        <asp:TextBox ID="txtMaximumFollowUpQuestions" runat="server" CssClass="jqa-small-input" MaxLength="2" />
+                        <span class="jqa-help">Default is 4. Enter 0 to disable follow-up questions. Allowed range: 0 to 20.</span>
+                    </div>
                 </fieldset>
 
                 <fieldset>

@@ -1,4 +1,5 @@
 <%@ Control Language="C#" AutoEventWireup="true" Inherits="DotNetNuke.Entities.Modules.PortalModuleBase" %>
+<%@ Register TagPrefix="dnn" TagName="texteditor" Src="~/controls/texteditor.ascx" %>
 <%@ Import Namespace="System" %>
 <%@ Import Namespace="System.Collections.Generic" %>
 <%@ Import Namespace="System.Data" %>
@@ -6,6 +7,7 @@
 <%@ Import Namespace="System.Net.Mail" %>
 <%@ Import Namespace="System.Security.Cryptography" %>
 <%@ Import Namespace="System.Text" %>
+<%@ Import Namespace="System.Text.RegularExpressions" %>
 <%@ Import Namespace="System.Web" %>
 <%@ Import Namespace="System.Web.Security" %>
 <%@ Import Namespace="DotNetNuke.Common.Utilities" %>
@@ -13,6 +15,7 @@
 <%@ Import Namespace="DotNetNuke.Entities.Users" %>
 <%@ Import Namespace="DotNetNuke.Services.Exceptions" %>
 <%@ Import Namespace="DotNetNuke.Services.Mail" %>
+<%@ Import Namespace="DotNetNuke.Security" %>
 
 <script runat="server">
     private const int MinimumQuestionLength = 5;
@@ -23,6 +26,7 @@
     private const int MaximumBlockedTermCount = 250;
     private const int MaximumBlockedTermLength = 100;
     private const int GuestEditWindowMinutes = 5;
+    private const int MaximumRichAnswerHtmlLength = 50000;
     private const string SecurityTokenPrefix = "JacarandaQA_SecurityToken_";
     private const string CaptchaAnswerKey = "JacarandaQA_CaptchaAnswer";
     private const string ConversationCookiePrefix = "JacarandaQA_Conversation_";
@@ -36,6 +40,8 @@
     private const string PostRedirectModuleQueryKey = "jqamid";
     private const string PostRedirectQuestionQueryKey = "jqaqid";
     private const string PostRedirectMessageAnchorPrefix = "jacaranda-qa-message-";
+    private const string AdministrationTabQueryKey = "jqatab";
+    private const string AdministrationStatusQueryKey = "jqaadminstatus";
     private const string AnswerQuestionQueryKey = "jqaqid";
     private const string AnswerModuleQueryKey = "jqamid";
     private const string AnswerActionQueryKey = "jqaaction";
@@ -47,6 +53,7 @@
 
     private string QuestionsTable { get { return GetDnnTableName("JacarandaQAQuestions"); } }
     private string ResponsesTable { get { return GetDnnTableName("JacarandaQAResponses"); } }
+    private string AnswerDraftsTable { get { return GetDnnTableName("JacarandaQAAnswerDrafts"); } }
     private string PortalSettingsTable { get { return GetDnnTableName("JacarandaQAPortalSettings"); } }
     private string ConnectionString { get { return Config.GetConnectionString(); } }
     private string SecurityTokenSessionKey { get { return SecurityTokenPrefix + PortalId + "_" + TabId + "_" + ModuleId + "_" + UserId; } }
@@ -66,6 +73,96 @@
         }
     }
 
+    protected string FollowUpGuidanceText
+    {
+        get
+        {
+            var maximum = _settings == null ? 4 : _settings.MaximumFollowUpQuestions;
+            if (maximum <= 0) return "Follow-up questions are currently disabled on this site.";
+            return "After your question has been answered, the original questioner may ask up to " + maximum + " related follow-up " + (maximum == 1 ? "question." : "questions.");
+        }
+    }
+
+    protected void Page_Init(object sender, EventArgs e)
+    {
+        // The ministry answer TextEditor is declared statically in the ASCX,
+        // matching DNN's standard HTML module. Static creation lets WebForms
+        // restore editor state and postback data reliably before Save Draft/Publish.
+        if (txtAnswerEditor != null)
+        {
+            txtAnswerEditor.ChooseMode = false;
+            txtAnswerEditor.HtmlEncode = false;
+            if (!Page.IsPostBack)
+            {
+                txtAnswerEditor.DefaultMode = "RICH";
+                txtAnswerEditor.Mode = "RICH";
+            }
+        }
+    }
+
+    private void BindAnswerEditorModeSelector()
+    {
+        if (ddlAnswerEditorMode == null) return;
+
+        ddlAnswerEditorMode.Items.Clear();
+        
+        if (txtAnswerEditor != null && txtAnswerEditor.IsRichEditorAvailable)
+        {
+            ddlAnswerEditorMode.Items.Add(new System.Web.UI.WebControls.ListItem("Rich Text Editor", "RICH"));
+        }
+
+        ddlAnswerEditorMode.Items.Add(new System.Web.UI.WebControls.ListItem("Basic Text Box", "BASIC"));
+
+        var requestedMode = txtAnswerEditor == null ? "RICH" : (txtAnswerEditor.Mode ?? "RICH").ToUpperInvariant();
+        var selected = ddlAnswerEditorMode.Items.FindByValue(requestedMode);
+        if (selected == null)
+        {
+            requestedMode = ddlAnswerEditorMode.Items.FindByValue("RICH") != null ? "RICH" : "BASIC";
+        }
+        ddlAnswerEditorMode.SelectedValue = requestedMode;
+    }
+
+    protected void ddlAnswerEditorMode_SelectedIndexChanged(object sender, EventArgs e)
+    {
+        try
+        {
+            if (!CanManagePortalQandA()) return;
+
+                        if (txtAnswerEditor == null) return;
+
+            var requestedMode = String.Equals(ddlAnswerEditorMode.SelectedValue, "BASIC", StringComparison.OrdinalIgnoreCase)
+                ? "BASIC"
+                : "RICH";
+
+            if (requestedMode == "RICH" && !txtAnswerEditor.IsRichEditorAvailable)
+            {
+                requestedMode = "BASIC";
+            }
+
+            // Mirror DNN's standard HTML module: the external selector changes
+            // the TextEditor mode only when the administrator changes the list.
+            txtAnswerEditor.ChangeMode(requestedMode);
+
+            var matchingItem = ddlAnswerEditorMode.Items.FindByValue(requestedMode);
+            if (matchingItem != null)
+            {
+                ddlAnswerEditorMode.ClearSelection();
+                matchingItem.Selected = true;
+            }
+
+            int questionId;
+            if (Int32.TryParse(hdnResponseQuestionId.Value, out questionId) && questionId > 0)
+            {
+                RegisterFollowUpContextFocusScript(questionId);
+            }
+        }
+        catch (Exception ex)
+        {
+            Exceptions.LogException(ex);
+            ShowMessage("The answer editor mode could not be changed. Please try again.", false);
+        }
+    }
+
     protected void Page_Load(object sender, EventArgs e)
     {
         try
@@ -76,6 +173,7 @@
 
             if (!Page.IsPostBack)
             {
+                BindAnswerEditorModeSelector();
                 EnsureSecurityToken();
                 EnsureCaptchaChallenge();
                 ApplyAdministrationAnswerContext();
@@ -386,6 +484,30 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
         return String.Empty;
     }
 
+    private void RedirectToAdministrationAfterDraftSave()
+    {
+        var administrationUrl = ResolveStandaloneAdministrationUrl();
+        if (String.IsNullOrWhiteSpace(administrationUrl))
+        {
+            try
+            {
+                administrationUrl = EditUrl("Administration");
+            }
+            catch
+            {
+                administrationUrl = DotNetNuke.Common.Globals.NavigateURL(TabId);
+            }
+        }
+
+        var separator = administrationUrl.IndexOf('?') >= 0 ? "&" : "?";
+        administrationUrl += separator
+            + AdministrationTabQueryKey + "=awaiting"
+            + "&" + AdministrationStatusQueryKey + "=draftsaved";
+
+        Response.Redirect(administrationUrl, false);
+        Context.ApplicationInstance.CompleteRequest();
+    }
+
     protected void btnSubmitQuestion_Click(object sender, EventArgs e)
     {
         try
@@ -566,6 +688,76 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
         BindQuestions();
     }
 
+    private string GetSubmittedMinistryAnswerHtml()
+    {
+        // DNN's standard HTML module reads the statically-declared TextEditor.Text
+        // directly on save. Use the same lifecycle-safe pattern here.
+        return txtAnswerEditor == null ? String.Empty : (txtAnswerEditor.Text ?? String.Empty);
+    }
+
+    protected void btnSaveDraft_Click(object sender, EventArgs e)
+    {
+        try
+        {
+            _settings = ReadPortalSettings();
+            if (!CanManagePortalQandA())
+            {
+                ShowMessage("You do not have permission to save answer drafts.", false);
+                return;
+            }
+            if (!ValidateSecurityToken())
+            {
+                ShowMessage("The form security token expired. Please refresh the page and try again.", false);
+                return;
+            }
+
+            int questionId;
+            if (!Int32.TryParse(hdnResponseQuestionId.Value, out questionId) || questionId <= 0
+                || !String.Equals(hdnResponseMode.Value, "answer", StringComparison.Ordinal))
+            {
+                ShowMessage("The selected question could not be found.", false);
+                return;
+            }
+
+            var question = GetQuestion(questionId, true);
+            if (question == null || question.QuestionStatus != 0)
+            {
+                ShowMessage("This question is no longer awaiting an answer, so the draft cannot be saved.", false);
+                ClearResponseContext();
+                return;
+            }
+
+            var rawHtml = GetSubmittedMinistryAnswerHtml();
+            if (rawHtml.Length > MaximumRichAnswerHtmlLength)
+            {
+                ShowResponseMessageAndRefocus("The formatted answer is too large. Please shorten it and try again.", questionId);
+                return;
+            }
+
+            var cleanHtml = SanitizeMinistryAnswerHtml(rawHtml);
+            var plainText = RichTextToPlainText(cleanHtml).Trim();
+            if (plainText.Length < MinimumResponseLength || plainText.Length > _settings.MaximumResponseLength)
+            {
+                ShowResponseMessageAndRefocus("Please enter draft text between " + MinimumResponseLength + " and " + _settings.MaximumResponseLength + " characters.", questionId);
+                return;
+            }
+
+            if (!SaveAnswerDraft(question, cleanHtml))
+            {
+                ShowResponseMessageAndRefocus("The draft could not be saved because this question is no longer awaiting an answer.", questionId);
+                return;
+            }
+
+            RedirectToAdministrationAfterDraftSave();
+            return;
+        }
+        catch (Exception ex)
+        {
+            Exceptions.LogException(ex);
+            ShowMessage("The answer draft could not be saved. Please try again later.", false);
+        }
+    }
+
     protected void btnSubmitResponse_Click(object sender, EventArgs e)
     {
         try
@@ -604,6 +796,13 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
 
             var requestedAnswer = String.Equals(hdnResponseMode.Value, "answer", StringComparison.Ordinal);
             var ministryAnswer = requestedAnswer && CanManagePortalQandA() && question.QuestionStatus == 0;
+
+            if (!requestedAnswer && IsOriginalQuestioner(question) && HasReachedFollowUpLimit(question.QuestionId))
+            {
+                ShowResponseMessageAndRefocus(GetFollowUpLimitMessage(), question.QuestionId);
+                return;
+            }
+
             var questionerFollowUp = !requestedAnswer && CanQuestionerFollowUp(question);
             if (!ministryAnswer && !questionerFollowUp)
             {
@@ -611,8 +810,26 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
                 return;
             }
 
-            var text = (txtResponse.Text ?? String.Empty).Trim();
-            if (text.Length < MinimumResponseLength || text.Length > _settings.MaximumResponseLength)
+            string text;
+            string plainTextForValidation;
+            if (ministryAnswer)
+            {
+                var rawHtml = GetSubmittedMinistryAnswerHtml();
+                if (rawHtml.Length > MaximumRichAnswerHtmlLength)
+                {
+                    ShowResponseMessageAndRefocus("The formatted answer is too large. Please shorten it and try again.", question.QuestionId);
+                    return;
+                }
+                text = SanitizeMinistryAnswerHtml(rawHtml);
+                plainTextForValidation = RichTextToPlainText(text).Trim();
+            }
+            else
+            {
+                text = (txtResponse.Text ?? String.Empty).Trim();
+                plainTextForValidation = text;
+            }
+
+            if (plainTextForValidation.Length < MinimumResponseLength || plainTextForValidation.Length > _settings.MaximumResponseLength)
             {
                 ShowResponseMessageAndRefocus("Please enter a response between " + MinimumResponseLength + " and " + _settings.MaximumResponseLength + " characters.", question.QuestionId);
                 return;
@@ -638,20 +855,22 @@ ORDER BY CASE WHEN t.TabID = @CurrentTabId THEN 1 ELSE 0 END, t.TabID;";
             var displayName = ministryAnswer ? GetCurrentUserDisplayName() : question.DisplayName;
             var responseType = ministryAnswer ? 1 : 2;
             var approved = ministryAnswer || (!isGuest && !_settings.RequireRegisteredModeration);
-            var languageFlagged = ContainsBlockedLanguage(text);
+            var languageFlagged = ContainsBlockedLanguage(plainTextForValidation);
             var responseId = InsertResponse(question, responseType, displayName, text, isGuest, guestRateKey, approved, languageFlagged);
             if (responseId <= 0)
             {
                 var blockedMessage = ministryAnswer
                     ? "This question is no longer awaiting an answer."
-                    : "A follow-up is already awaiting moderation or this question is no longer ready for another follow-up.";
+                    : (HasReachedFollowUpLimit(question.QuestionId)
+                        ? GetFollowUpLimitMessage()
+                        : "A follow-up is already awaiting moderation or this question is no longer ready for another follow-up.");
                 ShowResponseMessageAndRefocus(blockedMessage, question.QuestionId);
                 return;
             }
 
             if (ministryAnswer)
             {
-                SendQuestionerAnswerNotification(question, text);
+                SendQuestionerAnswerNotification(question, RichTextToPlainText(text));
             }
             else
             {
@@ -969,6 +1188,35 @@ WHERE QuestionId = @QuestionId
 
                     if (responseType == 2)
                     {
+                        if (_settings.MaximumFollowUpQuestions <= 0)
+                        {
+                            transaction.Rollback();
+                            return 0;
+                        }
+
+                        using (var countCommand = connection.CreateCommand())
+                        {
+                            countCommand.Transaction = transaction;
+                            countCommand.CommandText = @"
+SELECT COUNT(1)
+FROM " + ResponsesTable + @" WITH (UPDLOCK, HOLDLOCK)
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
+  AND IsDeleted = 0
+  AND ResponseType = 2;";
+                            countCommand.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                            countCommand.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                            countCommand.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                            countCommand.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                            if (Convert.ToInt32(countCommand.ExecuteScalar()) >= _settings.MaximumFollowUpQuestions)
+                            {
+                                transaction.Rollback();
+                                return 0;
+                            }
+                        }
+
                         using (var pending = connection.CreateCommand())
                         {
                             pending.Transaction = transaction;
@@ -997,10 +1245,10 @@ WHERE QuestionId = @QuestionId
                         command.CommandText = @"
 INSERT INTO " + ResponsesTable + @"
 (QuestionId, PortalId, TabId, ModuleId, ResponseType, UserId, DisplayName, ResponseText, GuestRateLimitKey,
- IsApproved, IsDeleted, IsLanguageFlagged, CreatedOnDate, CreatedByUserId)
+ IsApproved, IsDeleted, IsLanguageFlagged, IsRichText, CreatedOnDate, CreatedByUserId)
 VALUES
 (@QuestionId, @PortalId, @TabId, @ModuleId, @ResponseType, @UserId, @DisplayName, @ResponseText, @GuestRateLimitKey,
- @IsApproved, 0, @IsLanguageFlagged, GETUTCDATE(), @CreatedByUserId);
+ @IsApproved, 0, @IsLanguageFlagged, @IsRichText, GETUTCDATE(), @CreatedByUserId);
 SELECT CAST(SCOPE_IDENTITY() AS INT);";
                         command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
                         command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
@@ -1009,10 +1257,11 @@ SELECT CAST(SCOPE_IDENTITY() AS INT);";
                         command.Parameters.Add("@ResponseType", SqlDbType.TinyInt).Value = responseType;
                         command.Parameters.Add("@UserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
                         command.Parameters.Add("@DisplayName", SqlDbType.NVarChar, 100).Value = Truncate(displayName, 100);
-                        command.Parameters.Add("@ResponseText", SqlDbType.NVarChar, _settings.MaximumResponseLength).Value = text;
+                        command.Parameters.Add("@ResponseText", SqlDbType.NVarChar, responseType == 1 ? -1 : _settings.MaximumResponseLength).Value = text;
                         command.Parameters.Add("@GuestRateLimitKey", SqlDbType.NVarChar, 64).Value = isGuest ? (object)guestRateKey : DBNull.Value;
                         command.Parameters.Add("@IsApproved", SqlDbType.Bit).Value = approved;
                         command.Parameters.Add("@IsLanguageFlagged", SqlDbType.Bit).Value = languageFlagged;
+                        command.Parameters.Add("@IsRichText", SqlDbType.Bit).Value = responseType == 1;
                         command.Parameters.Add("@CreatedByUserId", SqlDbType.Int).Value = isGuest ? (object)DBNull.Value : UserId;
                         responseId = Convert.ToInt32(command.ExecuteScalar());
                     }
@@ -1042,6 +1291,22 @@ WHERE QuestionId = @QuestionId
                         }
                     }
 
+                    if (responseType == 1)
+                    {
+                        using (var deleteDraft = connection.CreateCommand())
+                        {
+                            deleteDraft.Transaction = transaction;
+                            deleteDraft.CommandText = @"
+DELETE FROM " + AnswerDraftsTable + @"
+WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND ModuleId = @ModuleId;";
+                            deleteDraft.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                            deleteDraft.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                            deleteDraft.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                            deleteDraft.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                            deleteDraft.ExecuteNonQuery();
+                        }
+                    }
+
                     transaction.Commit();
                     return responseId;
                 }
@@ -1052,6 +1317,148 @@ WHERE QuestionId = @QuestionId
                 }
             }
         }
+    }
+
+    private AnswerDraftRow GetAnswerDraft(int questionId)
+    {
+        if (questionId <= 0 || !CanManagePortalQandA()) return null;
+        using (var connection = new SqlConnection(ConnectionString))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+SELECT TOP 1 DraftHtml, CreatedOnDate, ModifiedOnDate
+FROM " + AnswerDraftsTable + @"
+WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND ModuleId = @ModuleId;";
+            command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = questionId;
+            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+            connection.Open();
+            using (var reader = command.ExecuteReader())
+            {
+                if (!reader.Read()) return null;
+                return new AnswerDraftRow {
+                    DraftHtml = Convert.ToString(reader["DraftHtml"]),
+                    CreatedOnDate = Convert.ToDateTime(reader["CreatedOnDate"]),
+                    ModifiedOnDate = Convert.ToDateTime(reader["ModifiedOnDate"])
+                };
+            }
+        }
+    }
+
+    private bool SaveAnswerDraft(QuestionRow question, string cleanHtml)
+    {
+        if (question == null || question.QuestionId <= 0 || !CanManagePortalQandA()) return false;
+        using (var connection = new SqlConnection(ConnectionString))
+        {
+            connection.Open();
+            using (var transaction = connection.BeginTransaction(IsolationLevel.Serializable))
+            {
+                try
+                {
+                    using (var guard = connection.CreateCommand())
+                    {
+                        guard.Transaction = transaction;
+                        guard.CommandText = @"
+SELECT COUNT(1)
+FROM " + QuestionsTable + @" WITH (UPDLOCK, HOLDLOCK)
+WHERE QuestionId=@QuestionId AND PortalId=@PortalId AND TabId=@TabId AND ModuleId=@ModuleId
+  AND IsDeleted=0 AND IsApproved=1 AND QuestionStatus=0;";
+                        guard.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                        guard.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                        guard.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                        guard.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                        if (Convert.ToInt32(guard.ExecuteScalar()) != 1)
+                        {
+                            transaction.Rollback();
+                            return false;
+                        }
+                    }
+
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandText = @"
+UPDATE " + AnswerDraftsTable + @"
+SET DraftHtml=@DraftHtml, UserId=@UserId, ModifiedOnDate=GETUTCDATE()
+WHERE QuestionId=@QuestionId AND PortalId=@PortalId AND TabId=@TabId AND ModuleId=@ModuleId;
+IF @@ROWCOUNT = 0
+BEGIN
+    INSERT INTO " + AnswerDraftsTable + @"
+    (QuestionId, PortalId, TabId, ModuleId, UserId, DraftHtml, CreatedOnDate, ModifiedOnDate)
+    VALUES (@QuestionId, @PortalId, @TabId, @ModuleId, @UserId, @DraftHtml, GETUTCDATE(), GETUTCDATE());
+END";
+                        command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = question.QuestionId;
+                        command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+                        command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+                        command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+                        command.Parameters.Add("@UserId", SqlDbType.Int).Value = UserId;
+                        command.Parameters.Add("@DraftHtml", SqlDbType.NVarChar, -1).Value = cleanHtml ?? String.Empty;
+                        command.ExecuteNonQuery();
+                    }
+                    transaction.Commit();
+                    return true;
+                }
+                catch
+                {
+                    try { transaction.Rollback(); } catch { }
+                    throw;
+                }
+            }
+        }
+    }
+
+    private string SanitizeMinistryAnswerHtml(string html)
+    {
+        if (String.IsNullOrWhiteSpace(html)) return String.Empty;
+
+        // DNN's configured editor is available only to authenticated administrators here.
+        // NoScripting plus the additional deny-list below preserves normal formatting but removes active content.
+        var filtered = new PortalSecurity().InputFilter(html, PortalSecurity.FilterFlag.NoScripting);
+        var options = RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant;
+
+        filtered = Regex.Replace(filtered, @"<!--.*?-->", String.Empty, options);
+        filtered = Regex.Replace(filtered, @"<\s*(script|style|iframe|object|embed|form|input|button|textarea|select|option|meta|link|base|svg|math|video|audio|source)\b[^>]*>.*?<\s*/\s*\1\s*>", String.Empty, options);
+        filtered = Regex.Replace(filtered, @"<\s*/?\s*(script|style|iframe|object|embed|form|input|button|textarea|select|option|meta|link|base|svg|math|video|audio|source)\b[^>]*>", String.Empty, options);
+        filtered = Regex.Replace(filtered, @"\s+on[a-z0-9_-]+\s*=\s*(?:""[^""]*""|'[^']*'|[^\s>]+)", String.Empty, options);
+        filtered = Regex.Replace(filtered, @"\s+(style|srcdoc|formaction|target)\s*=\s*(?:""[^""]*""|'[^']*'|[^\s>]+)", String.Empty, options);
+        filtered = Regex.Replace(filtered, @"\s+(href|src)\s*=\s*([""'])\s*(?:javascript|vbscript|data)\s*:[^""']*\2", String.Empty, options);
+        filtered = Regex.Replace(filtered, @"\s+(href|src)\s*=\s*(?:javascript|vbscript|data)\s*:[^\s>]+", String.Empty, options);
+
+        return filtered.Trim();
+    }
+
+    private string RichTextToPlainText(string html)
+    {
+        if (String.IsNullOrWhiteSpace(html)) return String.Empty;
+        var text = html;
+        text = Regex.Replace(text, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"<\s*li\b[^>]*>", "- ", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"<\s*/\s*(p|div|li|h[1-6]|blockquote|tr)\s*>", "\n", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"<[^>]+>", String.Empty, RegexOptions.Singleline);
+        text = HttpUtility.HtmlDecode(text);
+        text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+        text = Regex.Replace(text, @"[ \t]+", " ");
+        text = Regex.Replace(text, @" *\n *", "\n");
+        text = Regex.Replace(text, @"\n{3,}", "\n\n");
+        return text.Trim();
+    }
+
+    protected string RenderResponseText(object dataItem)
+    {
+        var row = dataItem as ResponseRow;
+        if (row == null) return String.Empty;
+        if (row.ResponseType == 1 && row.IsRichText)
+        {
+            return SanitizeMinistryAnswerHtml(row.ResponseText);
+        }
+        return HttpUtility.HtmlEncode(row.ResponseText ?? String.Empty);
+    }
+
+    protected string ResponseTextCss(object dataItem)
+    {
+        var row = dataItem as ResponseRow;
+        return row != null && row.ResponseType == 1 && row.IsRichText ? " jqa-rich-response-text" : String.Empty;
     }
 
     private void UpdateQuestionStatus(int questionId, int status)
@@ -1130,7 +1537,7 @@ ORDER BY CreatedOnDate DESC, QuestionId DESC;";
         using (var command = connection.CreateCommand())
         {
             command.CommandText = @"
-SELECT ResponseId, ResponseType, UserId, DisplayName, ResponseText, IsLanguageFlagged, CreatedOnDate
+SELECT ResponseId, ResponseType, UserId, DisplayName, ResponseText, IsLanguageFlagged, IsRichText, CreatedOnDate
 FROM " + ResponsesTable + @"
 WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND ModuleId = @ModuleId
   AND IsDeleted = 0 AND IsApproved = 1
@@ -1151,6 +1558,7 @@ ORDER BY CreatedOnDate ASC, ResponseId ASC;";
                         DisplayName = Convert.ToString(reader["DisplayName"]),
                         ResponseText = Convert.ToString(reader["ResponseText"]),
                         IsLanguageFlagged = Convert.ToBoolean(reader["IsLanguageFlagged"]),
+                        IsRichText = Convert.ToBoolean(reader["IsRichText"]),
                         CreatedOnDate = Convert.ToDateTime(reader["CreatedOnDate"])
                     });
                 }
@@ -1258,7 +1666,15 @@ WHERE QuestionId = @QuestionId AND PortalId = @PortalId AND TabId = @TabId AND M
     private bool CanQuestionerFollowUp(QuestionRow question)
     {
         if (question == null || question.QuestionStatus != 1) return false;
+        if (!IsOriginalQuestioner(question)) return false;
         if (HasPendingQuestionerFollowUp(question.QuestionId)) return false;
+        if (HasReachedFollowUpLimit(question.QuestionId)) return false;
+        return true;
+    }
+
+    private bool IsOriginalQuestioner(QuestionRow question)
+    {
+        if (question == null) return false;
         if (question.UserId.HasValue && question.UserId.Value > 0)
             return UserInfo != null && UserInfo.UserID == question.UserId.Value;
         return ValidateConversationCookie(question);
@@ -1275,14 +1691,66 @@ SELECT COUNT(1)
 FROM " + ResponsesTable + @"
 WHERE QuestionId = @QuestionId
   AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
   AND IsDeleted = 0
   AND IsApproved = 0
   AND ResponseType = 2;";
             command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = questionId;
             command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
             connection.Open();
             return Convert.ToInt32(command.ExecuteScalar()) > 0;
         }
+    }
+
+    private int GetQuestionerFollowUpCount(int questionId)
+    {
+        if (questionId <= 0) return 0;
+        using (var connection = new SqlConnection(ConnectionString))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+SELECT COUNT(1)
+FROM " + ResponsesTable + @"
+WHERE QuestionId = @QuestionId
+  AND PortalId = @PortalId
+  AND TabId = @TabId
+  AND ModuleId = @ModuleId
+  AND IsDeleted = 0
+  AND ResponseType = 2;";
+            command.Parameters.Add("@QuestionId", SqlDbType.Int).Value = questionId;
+            command.Parameters.Add("@PortalId", SqlDbType.Int).Value = PortalId;
+            command.Parameters.Add("@TabId", SqlDbType.Int).Value = TabId;
+            command.Parameters.Add("@ModuleId", SqlDbType.Int).Value = ModuleId;
+            connection.Open();
+            return Convert.ToInt32(command.ExecuteScalar());
+        }
+    }
+
+    private bool HasReachedFollowUpLimit(int questionId)
+    {
+        var maximum = _settings == null ? 4 : _settings.MaximumFollowUpQuestions;
+        if (maximum <= 0) return true;
+        return GetQuestionerFollowUpCount(questionId) >= maximum;
+    }
+
+    protected bool ShouldShowFollowUpLimitMessage(object dataItem)
+    {
+        var question = dataItem as QuestionRow;
+        return question != null
+            && question.QuestionStatus == 1
+            && IsOriginalQuestioner(question)
+            && HasReachedFollowUpLimit(question.QuestionId);
+    }
+
+    protected string GetFollowUpLimitMessage()
+    {
+        var maximum = _settings == null ? 4 : _settings.MaximumFollowUpQuestions;
+        if (maximum <= 0)
+            return "Follow-up questions are currently disabled for this Q&A.";
+        return "The maximum of " + maximum + " follow-up " + (maximum == 1 ? "question has" : "questions have") + " been reached for this conversation. If you have another question, please begin a new Q&A.";
     }
 
     private bool CanManagePortalQandA()
@@ -1300,8 +1768,26 @@ WHERE QuestionId = @QuestionId
         litResponseHeading.Text = answer ? "Answer this question" : "Ask a follow-up";
         litResponseQuestionTitle.Text = HttpUtility.HtmlEncode(question.QuestionTitle);
         btnSubmitResponse.Text = answer ? "Publish Answer" : "Submit Follow-up";
+        btnSaveDraft.Visible = answer && CanManagePortalQandA();
+        btnSaveDraft.OnClientClick = String.Empty;
+        btnSubmitResponse.OnClientClick = String.Empty;
+        pnlPlainResponseEditor.Visible = !answer;
+        pnlRichAnswerEditor.Visible = answer;
         pnlResponseForm.Visible = true;
         txtResponse.Text = String.Empty;
+        litDraftStatus.Text = String.Empty;
+
+        if (answer)
+        {
+                        var draft = GetAnswerDraft(question.QuestionId);
+            if (txtAnswerEditor != null) txtAnswerEditor.Text = draft == null ? String.Empty : draft.DraftHtml;
+            if (draft != null)
+            {
+                litResponseHeading.Text = "Resume answer draft";
+                litDraftStatus.Text = "Draft saved " + HttpUtility.HtmlEncode(draft.ModifiedOnDate.ToLocalTime().ToString("d MMM yyyy, h:mm tt")) + ".";
+            }
+        }
+
         EnsureCaptchaChallenge();
     }
 
@@ -1310,6 +1796,11 @@ WHERE QuestionId = @QuestionId
         hdnResponseQuestionId.Value = String.Empty;
         hdnResponseMode.Value = String.Empty;
         txtResponse.Text = String.Empty;
+        if (txtAnswerEditor != null) txtAnswerEditor.Text = String.Empty;
+        litDraftStatus.Text = String.Empty;
+        btnSaveDraft.Visible = false;
+        pnlPlainResponseEditor.Visible = true;
+        pnlRichAnswerEditor.Visible = false;
         txtResponseCaptcha.Text = String.Empty;
         pnlResponseForm.Visible = false;
     }
@@ -2039,14 +2530,15 @@ WHERE QuestionId = @QuestionId
         if (!IsValidEmailAddress(fromAddress)) return;
 
         var siteTitle = String.IsNullOrWhiteSpace(QaSiteTitle) ? "This site" : QaSiteTitle.Trim();
-        var subject = CleanEmailHeader("Your question is awaiting moderation — " + question.QuestionTitle);
+        var qaName = siteTitle + " Q&A";
+        var subject = CleanEmailHeader("Your " + qaName + " question is awaiting moderation — " + question.QuestionTitle);
         var greetingName = String.IsNullOrWhiteSpace(question.DisplayName) ? "there" : question.DisplayName.Trim();
 
         var body = "Hello " + greetingName + ",\r\n\r\n"
-            + "Thank you. Your question has been received by " + siteTitle + " Q&A and is awaiting moderation."
+            + "Thank you. Your question has been received by " + qaName + " and is awaiting moderation."
             + "\r\n\r\nQuestion: " + question.QuestionTitle
             + "\r\n\r\nYou do not need to submit the question again. We will email you when your question has been answered."
-            + "\r\n\r\n" + siteTitle + " Q&A";
+            + "\r\n\r\n" + qaName;
 
         SendPlainTextMail(fromAddress, recipient, subject, body);
     }
@@ -2061,22 +2553,24 @@ WHERE QuestionId = @QuestionId
         var fromAddress = GetNotificationFromAddress(recipient);
         if (!IsValidEmailAddress(fromAddress)) return;
 
+        var siteTitle = String.IsNullOrWhiteSpace(QaSiteTitle) ? "This site" : QaSiteTitle.Trim();
+        var qaName = siteTitle + " Q&A";
         var ministryAnswerCount = CountApprovedMinistryAnswers(question.QuestionId);
         var isFollowUpAnswer = ministryAnswerCount > 1;
         var subjectPrefix = isFollowUpAnswer
-            ? "Your Jacaranda Q&A follow-up has been answered"
-            : "Your Jacaranda Q&A question has been answered";
+            ? "Your " + qaName + " follow-up has been answered"
+            : "Your " + qaName + " question has been answered";
         var subject = CleanEmailHeader(subjectPrefix + " — " + question.QuestionTitle);
 
         var greetingName = String.IsNullOrWhiteSpace(question.DisplayName) ? "there" : question.DisplayName.Trim();
         var body = "Hello " + greetingName + ",\r\n\r\n"
             + (isFollowUpAnswer
-                ? "A follow-up in your Jacaranda Q&A conversation has been answered."
-                : "Your Jacaranda Q&A question has been answered.")
+                ? "A follow-up in your " + qaName + " conversation has been answered."
+                : "Your " + qaName + " question has been answered.")
             + "\r\n\r\nQuestion: " + question.QuestionTitle
             + "\r\n\r\nAnswer:\r\n" + (answerText ?? String.Empty).Trim()
             + "\r\n\r\nView the conversation:\r\n" + BuildQuestionUrl(question.QuestionId)
-            + "\r\n\r\n" + (String.IsNullOrWhiteSpace(QaSiteTitle) ? "This site" : QaSiteTitle.Trim()) + " Q&A";
+            + "\r\n\r\n" + qaName;
 
         SendPlainTextMail(fromAddress, recipient, subject, body);
     }
@@ -2220,7 +2714,7 @@ WHERE QuestionId = @QuestionId
             {
                 command.CommandText = @"
 SELECT PostingEnabled, GuestPostingEnabled, RequireRegisteredModeration, EnableLanguageFilter, BlockedLanguageTerms,
-       MaximumQuestionLength, MaximumResponseLength, EnableRateLimiting, RateLimitSeconds, RateLimitMaxPosts,
+       MaximumQuestionLength, MaximumResponseLength, MaximumFollowUpQuestions, EnableRateLimiting, RateLimitSeconds, RateLimitMaxPosts,
        RateLimitWindowMinutes, EnableCaptcha, EnableNotifications, NotificationEmailAddresses,
        IncludeSubmissionTextInNotifications
 FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
@@ -2237,6 +2731,7 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
                         result.BlockedLanguageTerms = ReadString(reader, "BlockedLanguageTerms", String.Empty);
                         result.MaximumQuestionLength = Clamp(ReadInt(reader, "MaximumQuestionLength", 4000), 250, 10000);
                         result.MaximumResponseLength = Clamp(ReadInt(reader, "MaximumResponseLength", 4000), 250, 10000);
+                        result.MaximumFollowUpQuestions = Clamp(ReadInt(reader, "MaximumFollowUpQuestions", 4), 0, 20);
                         result.EnableRateLimiting = ReadBool(reader, "EnableRateLimiting", true);
                         result.RateLimitSeconds = Clamp(ReadInt(reader, "RateLimitSeconds", 60), 0, 3600);
                         result.RateLimitMaxPosts = Clamp(ReadInt(reader, "RateLimitMaxPosts", 5), 1, 100);
@@ -2309,13 +2804,13 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
     {
         public bool PostingEnabled, GuestPostingEnabled, RequireRegisteredModeration, EnableLanguageFilter, EnableRateLimiting, EnableCaptcha, EnableNotifications, IncludeSubmissionTextInNotifications;
         public string BlockedLanguageTerms, NotificationEmailAddresses;
-        public int MaximumQuestionLength, MaximumResponseLength, RateLimitSeconds, RateLimitMaxPosts, RateLimitWindowMinutes;
+        public int MaximumQuestionLength, MaximumResponseLength, MaximumFollowUpQuestions, RateLimitSeconds, RateLimitMaxPosts, RateLimitWindowMinutes;
         public static PortalQaSettings Defaults()
         {
             return new PortalQaSettings {
                 PostingEnabled = true, GuestPostingEnabled = false, RequireRegisteredModeration = true,
                 EnableLanguageFilter = false, BlockedLanguageTerms = String.Empty,
-                MaximumQuestionLength = 4000, MaximumResponseLength = 4000,
+                MaximumQuestionLength = 4000, MaximumResponseLength = 4000, MaximumFollowUpQuestions = 4,
                 EnableRateLimiting = true, RateLimitSeconds = 60, RateLimitMaxPosts = 5, RateLimitWindowMinutes = 15,
                 EnableCaptcha = false, EnableNotifications = false, NotificationEmailAddresses = String.Empty,
                 IncludeSubmissionTextInNotifications = true
@@ -2346,7 +2841,15 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
         public string DisplayName { get; set; }
         public string ResponseText { get; set; }
         public bool IsLanguageFlagged { get; set; }
+        public bool IsRichText { get; set; }
         public DateTime CreatedOnDate { get; set; }
+    }
+
+    private sealed class AnswerDraftRow
+    {
+        public string DraftHtml { get; set; }
+        public DateTime CreatedOnDate { get; set; }
+        public DateTime ModifiedOnDate { get; set; }
     }
 </script>
 
@@ -2373,7 +2876,7 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
             <asp:LinkButton ID="btnToggleAskQuestion" runat="server" Text="Ask a Question"
                 CssClass="jqa-ask-button" CausesValidation="false"
                 OnClick="btnToggleAskQuestion_Click" />
-            <p class="jqa-guidance"><strong>Please ask one question at a time.</strong> <%= HttpUtility.HtmlEncode(QaSiteTitle) %> Q&amp;A is intended as a moderated question-and-answer ministry rather than an open discussion forum. After your question has been answered, the original questioner may ask a related follow-up.</p>
+            <p class="jqa-guidance"><strong>Please ask one question at a time.</strong> <%= HttpUtility.HtmlEncode(QaSiteTitle) %> Q&amp;A is intended as a moderated question-and-answer ministry rather than an open discussion forum. <%= HttpUtility.HtmlEncode(FollowUpGuidanceText) %></p>
         </asp:Panel>
 
         <asp:Panel ID="pnlAskForm" runat="server" Visible="false" CssClass="jqa-ask-panel"
@@ -2474,7 +2977,7 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
                                     <strong><%# ResponseRole(Eval("ResponseType")) %></strong>
                                     <span><%# Encode(Eval("DisplayName")) %> · <%# FormatDate(Eval("CreatedOnDate")) %></span>
                                 </div>
-                                <div class="jqa-response-text"><%# Encode(Eval("ResponseText")) %></div>
+                                <div class='jqa-response-text<%# ResponseTextCss(Container.DataItem) %>'><%# RenderResponseText(Container.DataItem) %></div>
                             </div>
                         </ItemTemplate>
                     </asp:Repeater>
@@ -2483,6 +2986,9 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
                         <asp:LinkButton ID="btnAnswer" runat="server" CommandName="Answer" CommandArgument='<%# Eval("QuestionId") %>' Text="Answer" CssClass="jqa-secondary-button" CausesValidation="false" Visible='<%# CanShowAnswerButton(Container.DataItem) %>' />
                         <asp:LinkButton ID="btnFollowUp" runat="server" CommandName="FollowUp" CommandArgument='<%# Eval("QuestionId") %>' Text="Ask a follow-up" CssClass="jqa-secondary-button" CausesValidation="false" Visible='<%# CanShowFollowUpButton(Container.DataItem) %>' />
                     </div>
+                    <asp:Panel ID="pnlFollowUpLimit" runat="server" CssClass="jqa-message jqa-message-info" Visible='<%# ShouldShowFollowUpLimitMessage(Container.DataItem) %>'>
+                        <%# HttpUtility.HtmlEncode(GetFollowUpLimitMessage()) %>
+                    </asp:Panel>
                     </div>
                 </article>
             </ItemTemplate>
@@ -2493,10 +2999,28 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
         <p class="jqa-context-title"><asp:Literal ID="litResponseQuestionTitle" runat="server" /></p>
         <asp:HiddenField ID="hdnResponseQuestionId" runat="server" />
         <asp:HiddenField ID="hdnResponseMode" runat="server" />
-        <div class="jqa-field">
-            <asp:Label ID="lblResponse" runat="server" AssociatedControlID="txtResponse" Text="Response" />
-            <asp:TextBox ID="txtResponse" runat="server" CssClass="jqa-textarea" TextMode="MultiLine" Rows="7" />
-        </div>
+<asp:Panel ID="pnlPlainResponseEditor" runat="server">
+            <div class="jqa-field">
+                <asp:Label ID="lblResponse" runat="server" AssociatedControlID="txtResponse" Text="Response" />
+                <asp:TextBox ID="txtResponse" runat="server" CssClass="jqa-textarea" TextMode="MultiLine" Rows="7" />
+            </div>
+        </asp:Panel>
+        <asp:Panel ID="pnlRichAnswerEditor" runat="server" Visible="false" CssClass="jqa-rich-answer-editor">
+            <div class="jqa-field">
+                <strong>Answer</strong>
+                <p class="jqa-editor-help">Use the site editor to prepare the ministry answer. Drafts are private until you choose Publish Answer.</p>
+                <dnn:textEditor ID="txtAnswerEditor" runat="server"
+                    Height="360" Width="100%" ChooseMode="false" HtmlEncode="false" />
+                <div class="jqa-editor-mode-selector">
+                    <asp:Label ID="lblAnswerEditorMode" runat="server" AssociatedControlID="ddlAnswerEditorMode" Text="Editor mode" CssClass="jqa-editor-mode-label" />
+                    <asp:DropDownList ID="ddlAnswerEditorMode" runat="server"
+                        AutoPostBack="true"
+                        CssClass="jqa-editor-mode-select"
+                        OnSelectedIndexChanged="ddlAnswerEditorMode_SelectedIndexChanged" />
+                </div>
+                <p class="jqa-draft-status"><asp:Literal ID="litDraftStatus" runat="server" /></p>
+            </div>
+        </asp:Panel>
         <div class="jqa-honeypot" aria-hidden="true">
             <asp:Label ID="lblResponseWebsite" runat="server" AssociatedControlID="txtResponseWebsite" Text="Website" />
             <asp:TextBox ID="txtResponseWebsite" runat="server" TabIndex="-1" autocomplete="off" />
@@ -2507,6 +3031,7 @@ FROM " + PortalSettingsTable + @" WHERE PortalId = @PortalId;";
             <asp:TextBox ID="txtResponseCaptcha" runat="server" CssClass="jqa-captcha-input" MaxLength="3" />
         </asp:Panel>
         <div class="jqa-actions">
+            <asp:Button ID="btnSaveDraft" runat="server" Text="Save Draft" CssClass="jqa-secondary-button" Visible="false" OnClick="btnSaveDraft_Click" />
             <asp:Button ID="btnSubmitResponse" runat="server" Text="Submit Response" CssClass="jqa-submit" OnClick="btnSubmitResponse_Click" />
             <asp:Button ID="btnCancelResponse" runat="server" Text="Cancel" CssClass="jqa-secondary-button" CausesValidation="false" OnClick="btnCancelResponse_Click" />
         </div>

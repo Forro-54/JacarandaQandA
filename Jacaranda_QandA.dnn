@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <dotnetnuke type="Package" version="5.0">
   <packages>
-    <package name="Jacaranda_QandA" type="Module" version="01.00.18">
+    <package name="Jacaranda_QandA" type="Module" version="01.01.09">
       <friendlyName>Jacaranda Q&amp;A</friendlyName>
       <description>A moderated theological question-and-answer module for DNN 10. Visitors can ask questions, the ministry team can answer, and the original questioner can continue with follow-up questions in the same conversation.</description>
       <owner>
@@ -24,6 +24,16 @@
               <path>Providers\DataProviders\SqlDataProvider</path>
               <name>01.00.00.SqlDataProvider</name>
               <version>01.00.00</version>
+            </script>
+            <script type="Install">
+              <path>Providers\DataProviders\SqlDataProvider</path>
+              <name>01.00.19.SqlDataProvider</name>
+              <version>01.00.19</version>
+            </script>
+            <script type="Install">
+              <path>Providers\DataProviders\SqlDataProvider</path>
+              <name>01.01.00.SqlDataProvider</name>
+              <version>01.01.00</version>
             </script>
             <script type="UnInstall">
               <path>Providers\DataProviders\SqlDataProvider</path>
@@ -83,7 +93,7 @@
       </components>
     </package>
 
-    <package name="Jacaranda_QandA_Administration" type="Module" version="01.00.18">
+    <package name="Jacaranda_QandA_Administration" type="Module" version="01.01.09">
       <friendlyName>Jacaranda Q&amp;A Administration</friendlyName>
       <description>Standalone administration module for Jacaranda Q&amp;A moderation, question status management and portal-wide Q&amp;A settings.</description>
       <owner>

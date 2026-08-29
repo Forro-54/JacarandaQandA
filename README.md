@@ -1,8 +1,56 @@
 # Jacaranda Q&A
 
+## 01.01.09 — Static DNN TextEditor draft fix
+
+The ministry answer editor now follows DNN 10.3.2's standard HTML module pattern: a statically declared `dnn:textEditor` control in the ASCX. Draft Save/Publish reads `TextEditor.Text` directly. This replaces the dynamic-editor/browser-snapshot workaround and fixes resumed draft edits not being persisted reliably.
+
+## 01.01.08 — Reliable draft updates
+
+Resumed answer drafts now save the current editor content reliably. Before **Save Draft** or **Publish Answer**, the Q&A page snapshots the current Rich Text Editor or Basic Text Box content and posts that snapshot to the server. This avoids dynamic TextEditor lifecycle differences causing the previous saved draft to be written back unchanged.
+
+## 01.01.07 — Return to Administration after Save Draft
+
+After **Save Draft**, the answer workflow now returns directly to the Q&A Administration page and opens the **Awaiting Answer** tab, where the saved draft is visible as **Draft saved / Resume Draft**.
+
+## 01.01.06 — Standard-style editor selector
+
+Ministry answers now use a clear external **Editor mode** dropdown, following the same pattern as DNN's standard HTML module. The administrator can choose **Rich Text Editor** or **Basic Text Box**. Rich Text Editor remains the default.
+
+## 01.01.05 — Rich editor duplicate-control fix
+
+Fixes the WebForms page-load exception `Multiple controls with the same ID 'txtAnswerEditor' were found` introduced by the 01.01.04 rich-mode forcing change. The Q&A editor now uses a unique outer ID and no longer calls `ChangeMode("RICH")` after setting the editor mode.
+
+## 01.01.04 — Rich editor mode fixed
+
+Ministry answers now open directly in DNN's configured Rich Text Editor. The Basic Text Box / Rich Text Editor mode chooser is disabled because its DNN-rendered selector controls remain difficult to see under some skins and browsers. Q&A answer authors no longer need to select a mode.
+
+## 01.01.03 — Editor mode accessibility
+
+Improves the visibility of DNN's Basic Text Box / Rich Text Editor mode selectors inside the ministry answer editor. The native radio/checkbox controls are enlarged and the labels receive stronger contrast, spacing and selected-state emphasis. Styling remains scoped to Jacaranda Q&A only. No database or workflow changes.
+
+## 01.01.01 — Administration draft-binding compile fix
+
+Fixes the Administration WebForms compile error introduced in 01.01.00 by placing the draft-state properties on the QuestionAdminRow model used by the Awaiting Answer repeater. No database or workflow changes.
+
+## 01.01.00 — Rich answer editor and private drafts
+
+Administrator/Superuser ministry answers now use DNN's configured HTML editor (normally DNNConnect.CKE on DNN 10). Answers can be saved privately as drafts and resumed later before publication. Visitor questions and follow-ups remain plain text.
+
+Drafts are stored separately from published Responses, never appear in moderation/public queues, do not change the Question status and do not send email. Publishing an answer removes its draft, stores the sanitized rich-text answer, marks the Question Answered and sends the existing plain-text answer notification to the questioner. Existing pre-01.01.00 responses remain plain text and continue to be HTML-encoded.
+
 Jacaranda Q&A is an independent DNN 10 WebForms module for moderated theological question-and-answer ministry.
 
 ## Version
+
+01.01.04 — Ministry answers fixed to Rich Text Editor mode.
+
+01.01.01 — Administration draft-binding compile fix.
+
+01.01.00 — Rich answer editor and private drafts.
+
+01.00.20 — Dynamic questioner email branding.
+
+01.00.19 — Configurable follow-up question limit.
 
 01.00.18 — Moderation acknowledgement delivery fix.
 
@@ -168,3 +216,14 @@ Registered questioners receive the acknowledgement at the email address on their
 The acknowledgement confirms that the question has been received, is awaiting moderation, should not be submitted again, and that the questioner will receive another email when a ministry answer is published.
 
 The existing **Enable Notifications** portal setting remains the master switch for administrator alerts, submission acknowledgements and answer notifications. No database schema changes are required.
+
+## 01.00.19 configurable follow-up limit
+
+Q&A Administration now includes a portal-wide **Maximum follow-up questions per question** setting. The default is **4**, with an allowed range of **0 to 20**. Setting the value to **0** disables follow-up questions.
+
+The limit counts all non-deleted questioner follow-ups, whether already approved or still awaiting moderation. Ministry answers do not count. When the maximum is reached, **Ask a follow-up** is removed for the original questioner and the conversation shows a clear message inviting them to begin a new Q&A if they have another question.
+
+The limit is enforced in the public UI, again during server-side permission checks, and once more inside the serializable response-insert transaction. This prevents hidden-field/postback tampering and rapid concurrent submissions from exceeding the configured maximum. Existing conversations immediately respect later increases or decreases to the setting; historical follow-ups are never deleted by lowering the limit.
+
+Version 01.00.19 adds the `MaximumFollowUpQuestions` portal-setting column through `01.00.19.SqlDataProvider`, defaulting existing portals to four follow-ups per question.
+

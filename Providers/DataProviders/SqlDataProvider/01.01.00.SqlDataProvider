@@ -1,0 +1,38 @@
+-- Jacaranda Q&A 01.01.00
+-- Adds rich-text ministry answers and private answer drafts.
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'{databaseOwner}[{objectQualifier}JacarandaQAResponses]')
+      AND name = N'IsRichText'
+)
+BEGIN
+    ALTER TABLE {databaseOwner}[{objectQualifier}JacarandaQAResponses]
+    ADD [IsRichText] BIT NOT NULL
+        CONSTRAINT [DF_{objectQualifier}JQAR_RichText] DEFAULT ((0));
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.objects
+    WHERE object_id = OBJECT_ID(N'{databaseOwner}[{objectQualifier}JacarandaQAAnswerDrafts]')
+      AND type = N'U'
+)
+BEGIN
+    CREATE TABLE {databaseOwner}[{objectQualifier}JacarandaQAAnswerDrafts] (
+        [QuestionId] INT NOT NULL,
+        [PortalId] INT NOT NULL,
+        [TabId] INT NOT NULL,
+        [ModuleId] INT NOT NULL,
+        [UserId] INT NOT NULL,
+        [DraftHtml] NVARCHAR(MAX) NOT NULL,
+        [CreatedOnDate] DATETIME NOT NULL CONSTRAINT [DF_{objectQualifier}JQAD_Created] DEFAULT (GETUTCDATE()),
+        [ModifiedOnDate] DATETIME NOT NULL CONSTRAINT [DF_{objectQualifier}JQAD_Modified] DEFAULT (GETUTCDATE()),
+        CONSTRAINT [PK_{objectQualifier}JacarandaQAAnswerDrafts] PRIMARY KEY CLUSTERED ([QuestionId] ASC)
+    );
+
+    CREATE NONCLUSTERED INDEX [IX_{objectQualifier}JQAD_Portal]
+    ON {databaseOwner}[{objectQualifier}JacarandaQAAnswerDrafts]
+       ([PortalId], [TabId], [ModuleId], [ModifiedOnDate] DESC);
+END
+GO

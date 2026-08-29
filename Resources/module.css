@@ -310,3 +310,140 @@
 .jqa-question-expanded .jqa-question-body {
     display: block;
 }
+
+/* 01.01.00 rich ministry-answer editor and private drafts. */
+.jqa-rich-answer-editor {
+    margin-top: .75rem;
+}
+.jqa-editor-help {
+    margin: .35rem 0 .75rem;
+    color: #444;
+}
+.jqa-draft-status {
+    margin: .6rem 0 0;
+    font-weight: 600;
+}
+.jqa-draft-badge {
+    display: inline-block;
+    margin-top: .35rem;
+    padding: .2rem .45rem;
+    border: 1px solid #999;
+    border-radius: 4px;
+    background: #fff;
+    font-size: .92em;
+    font-weight: 600;
+}
+.jqa-response-text p:first-child { margin-top: 0; }
+.jqa-response-text p:last-child { margin-bottom: 0; }
+.jqa-response-text blockquote {
+    margin: .75rem 0;
+    padding-left: 1rem;
+    border-left: 4px solid #999;
+}
+.jqa-response-text img {
+    max-width: 100%;
+    height: auto;
+}
+.jqa-rich-response-text { white-space: normal; }
+
+/* 01.01.03 accessibility: add strong visible borders around DNN editor mode selectors. */
+.jqa-rich-answer-editor input[type="radio"],
+.jqa-rich-answer-editor input[type="checkbox"] {
+    width: 22px !important;
+    height: 22px !important;
+    min-width: 22px !important;
+    min-height: 22px !important;
+    margin: 0 .4rem 0 0 !important;
+    vertical-align: middle;
+    opacity: 1 !important;
+    visibility: visible !important;
+    accent-color: #222;
+    border: 2px solid #333 !important;
+    outline: 2px solid #555 !important;
+    outline-offset: 1px;
+    box-shadow: 0 0 0 2px #fff, 0 0 0 4px #555 !important;
+    background-color: #fff !important;
+}
+.jqa-rich-answer-editor input[type="radio"] {
+    -webkit-appearance: radio;
+    appearance: auto;
+}
+.jqa-rich-answer-editor input[type="checkbox"] {
+    -webkit-appearance: checkbox;
+    appearance: auto;
+}
+.jqa-rich-answer-editor input[type="radio"] + label,
+.jqa-rich-answer-editor input[type="checkbox"] + label {
+    display: inline-block;
+    margin: .15rem 1rem .35rem 0 !important;
+    padding: .35rem .6rem;
+    border: 1px solid #777;
+    border-radius: 5px;
+    background: #fff;
+    color: #222 !important;
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    line-height: 1.35;
+    vertical-align: middle;
+    cursor: pointer;
+}
+.jqa-rich-answer-editor input[type="radio"]:checked + label,
+.jqa-rich-answer-editor input[type="checkbox"]:checked + label {
+    border-width: 2px;
+    border-color: #333;
+    box-shadow: 0 0 0 2px rgba(0,0,0,.12);
+}
+.jqa-rich-answer-editor input[type="radio"]:focus-visible,
+.jqa-rich-answer-editor input[type="checkbox"]:focus-visible {
+    outline: 3px solid #111 !important;
+    outline-offset: 3px;
+    box-shadow: 0 0 0 2px #fff, 0 0 0 5px #111 !important;
+}
+
+
+/* 01.01.06: DNN-style answer editor mode selector */
+.jacaranda-qa .jqa-editor-mode-selector {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 4px;
+    width: 100%;
+}
+
+.jacaranda-qa .jqa-editor-mode-label {
+    font-size: 16px;
+    font-weight: 700;
+    color: #222;
+}
+
+.jacaranda-qa .jqa-editor-mode-select {
+    min-width: 205px;
+    min-height: 42px;
+    padding: 7px 34px 7px 10px;
+    border: 2px solid #555 !important;
+    border-radius: 3px;
+    background-color: #fff;
+    color: #111;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.3;
+    cursor: pointer;
+}
+
+.jacaranda-qa .jqa-editor-mode-select:focus {
+    outline: 3px solid #222;
+    outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+    .jacaranda-qa .jqa-editor-mode-selector {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .jacaranda-qa .jqa-editor-mode-select {
+        width: 100%;
+        max-width: 100%;
+    }
+}

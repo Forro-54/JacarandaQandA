@@ -1,3 +1,110 @@
+Jacaranda Q&A 01.01.09
+
+- Deep fix for resumed answer drafts not retaining subsequent edits.
+- Replaces the dynamically-created ministry TextEditor with a statically-declared DNN TextEditor, matching DNN 10.3.2's standard HTML module architecture.
+- Save Draft and Publish Answer now read the TextEditor.Text property directly, as DNN's own HTML module does.
+- Removes the JavaScript CKEditor snapshot workaround introduced in 01.01.08.
+- Preserves the external Rich Text Editor / Basic Text Box dropdown and changes mode through TextEditor.ChangeMode().
+- Preserves one private draft per question, repeated draft updates, Save Draft return to Awaiting Answer, and all existing notification/security behavior.
+- No database schema changes.
+
+Jacaranda Q&A 01.01.08
+
+- Fixes resumed answer drafts not reliably saving updated editor content.
+- Save Draft and Publish Answer now capture the current browser-side editor contents immediately before postback.
+- Supports both DNN Rich Text Editor (CKEditor) and Basic Text Box modes.
+- The posted editor snapshot is used as the authoritative submitted value, with TextEditor.Text retained as a server-side fallback.
+- An intentionally emptied editor is also captured correctly and validated instead of falling back to the previous draft.
+- No database schema, moderation, notification, or public Q&A workflow changes.
+
+Jacaranda Q&A 01.01.07
+
+- Save Draft now returns the administrator to the standalone Q&A Administration page.
+- The Administration page opens directly on the Awaiting Answer tab after a draft is saved.
+- A confirmation message states that the draft was saved privately and no email was sent.
+- Falls back to the internal Administration control if no standalone Administration module is placed.
+- Publish Answer behavior is unchanged.
+- No database, draft schema, notification, moderation, or security changes.
+
+Jacaranda Q&A 01.01.06
+
+- Restores editor mode choice using the same external dropdown pattern as DNN's standard HTML editor.
+- Adds a clear Editor mode selector with Rich Text Editor and Basic Text Box choices.
+- Keeps the DNN TextEditor built-in ChooseMode control disabled.
+- Changes editor mode only from the external dropdown via TextEditor.ChangeMode(), matching DNN's standard HTML module pattern.
+- Uses a large, high-contrast dropdown that remains scoped to the Q&A answer editor.
+- Keeps Rich Text Editor as the default mode.
+- No database, draft, moderation, notification or security changes.
+
+Jacaranda Q&A 01.01.05
+
+- Fixes a Page Load Exception caused by duplicate TextEditor child controls after 01.01.04.
+- Removes the explicit ChangeMode("RICH") call that could rebuild DNN's rich editor after Mode was already set to RICH.
+- Gives the dynamically loaded Q&A TextEditor a unique outer ID: jqaRichAnswerEditor.
+- Keeps ChooseMode disabled and ministry answers fixed to Rich Text Editor mode.
+- No database, draft, moderation, notification or security changes.
+
+Jacaranda Q&A 01.01.04
+
+- Removes the DNN Basic Text Box / Rich Text Editor mode chooser from the ministry answer workflow.
+- Ministry answers now open directly in DNN's configured Rich Text Editor.
+- Forces TextEditor DefaultMode and Mode to RICH and disables ChooseMode.
+- Adds an explicit Rich Text Editor label above the answer editor.
+- Eliminates the low-visibility selector controls rather than relying on skin/browser-dependent checkbox/radio styling.
+- No database, draft, notification, moderation or security changes.
+
+Jacaranda Q&A 01.01.03
+
+- Accessibility refinement: adds a strong visible border/outline around the Basic Text Box and Rich Text Editor selector controls in the ministry answer editor.
+- Styling remains scoped to Jacaranda Q&A only.
+- No database, workflow, notification or security changes.
+
+- Improves visibility and accessibility of the DNN editor mode controls used by ministry answers.
+- Makes the Basic Text Box / Rich Text Editor radio/checkbox controls larger, higher-contrast and easier to identify.
+- Increases mode-label size and weight and adds a clear selected-state outline.
+- Styles are scoped to the Jacaranda Q&A rich-answer editor and do not alter editor controls elsewhere on the DNN site.
+- No database schema or workflow changes.
+
+Jacaranda Q&A 01.01.01
+
+- Fixes Administration.ascx inline compilation failure introduced in 01.01.00.
+- Moves HasDraft and DraftModifiedOnDate onto the QuestionAdminRow model used by the Awaiting Answer administration repeater.
+- Restores Q&A Administration page loading and Draft saved / Resume Draft bindings.
+- No database schema changes; the 01.01.00 rich-editor/draft migration remains unchanged.
+
+Jacaranda Q&A 01.01.00
+
+- Adds DNN's configured HTML editor for Administrator/Superuser ministry answers.
+- Visitor questions and follow-up questions remain plain text.
+- Adds Save Draft and Resume Draft workflow for ministry answers. Drafts are private, do not change question status and do not send email.
+- Publishing a ministry answer converts the stored draft/current editor content into a published rich-text answer, marks the question Answered and sends the existing plain-text questioner notification.
+- Adds a separate JacarandaQAAnswerDrafts table so drafts never enter public or moderation response queues.
+- Adds IsRichText to published Responses. Existing responses default to plain text and remain HTML-encoded; only new rich ministry answers render sanitized HTML.
+- Rich ministry HTML is filtered through DNN NoScripting plus additional active-content/attribute filtering before storage and again before rendering.
+- Questioner answer emails convert rich HTML to plain text and retain the direct conversation link.
+- Awaiting Answer administration rows show Draft saved and change View / Answer to Resume Draft where applicable.
+- Closing, manually completing or deleting a question removes any private answer draft.
+
+Jacaranda Q&A 01.00.20
+
+- Replaces hard-coded Jacaranda Q&A branding in all questioner-facing email subjects and bodies with the current DNN portal/site title.
+- Moderation acknowledgement subjects now use: Your [Site Title] Q&A question is awaiting moderation.
+- Question answer subjects now use: Your [Site Title] Q&A question has been answered.
+- Follow-up answer subjects now use: Your [Site Title] Q&A follow-up has been answered.
+- Questioner email body wording and footer use the same dynamic [Site Title] Q&A branding.
+- Administrator notification wording is unchanged.
+- No database schema or workflow changes.
+
+Jacaranda Q&A 01.00.19
+
+- Adds a portal-wide Maximum follow-up questions per question setting in Q&A Administration.
+- Default maximum is 4 follow-up questions. Administrators can set the value from 0 to 20; 0 disables follow-ups.
+- Counts all non-deleted questioner follow-ups, including pending moderation, so the limit cannot be bypassed through moderation timing.
+- Hides Ask a follow-up when the configured maximum has been reached and displays a clear conversation-limit message to the original questioner.
+- Enforces the configured maximum again server-side and inside the serializable response-insert transaction.
+- Existing conversations immediately respect increases or decreases to the portal-wide setting without deleting historical responses.
+- Adds 01.00.19.SqlDataProvider to add MaximumFollowUpQuestions with a default of 4.
+
 Jacaranda Q&A 01.00.18
 
 - Fixes questioner acknowledgement email delivery for questions awaiting moderation.
